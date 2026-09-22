@@ -2,15 +2,6 @@
 
 <sub>Closed-loop Autonomous Anesthesia Control & Safety Monitoring Platform (Multi-Agent System)</sub>
 
-<br>
-
-![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Status](https://img.shields.io/badge/Status-In%20Development-yellow?style=for-the-badge)
-![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
-![Org](https://img.shields.io/badge/Organization-KYU--SW-6f42c1?style=for-the-badge)
-
-</div>
-
 ---
 
 ## 📌 프로젝트 소개
@@ -23,6 +14,7 @@
 각 에이전트가 생체신호 분석 · 마취제 투여 제어 · 이상 상황 감시 · 알람 및 의사결정 지원 역할을 분담하여,
 보다 정밀하고 안전한 마취 관리 워크플로우를 목표로 합니다.
 
+> 수정 전
 ---
 
 ## ✨ 주요 기능
@@ -35,6 +27,7 @@
 - 🚨 **이상 징후 감지 및 알람** — 임계값 이탈 시 즉각적인 경고 및 안전 개입
 - 📊 **대시보드 시각화** — 수술진을 위한 실시간 상태 모니터링 화면
 
+> 수정 전
 ---
 
 ## 🧠 시스템 아키텍처
@@ -52,7 +45,7 @@ flowchart LR
     B --> H[대시보드]
 ```
 
-> 실제 에이전트 구성과 데이터 흐름에 맞게 다이어그램을 수정해 주세요.
+> 수정 전
 
 ---
 
@@ -68,6 +61,7 @@ flowchart LR
 | 시각화 | (예: Streamlit, Plotly) |
 | 배포/환경 | (예: Docker) |
 
+> 수정 전
 ---
 
 
@@ -84,6 +78,7 @@ AI-Addict/
 └── README.md
 ```
 
+> 수정 전
 ---
 
 ## 👥 팀원
@@ -92,7 +87,7 @@ AI-Addict/
 
 | 이름 | 학번 | GitHub |
 |------|------|--------|
-| 김민혁 | 236150 | [@아이디](https://github.com/) |
-| 류광민 | 236150 | [@아이디](https://github.com/) |
-| 이민준 | 23615036 | [@아이디](https://github.com/) |
-| 이준용 | 25615036 | [@아이디](https://github.com/) |
+| 김민혁 | 23615007 | [깃허브 주소](https://github.com/rlaalsgur187) |
+| 류광민 | 23615020 | [깃허브 주소](https://github.com/ssy9884-ux) |
+| 이민준 | 23615036 | [깃허브 주소](https://github.com/MANBI049) |
+| 이준용 | 25615036 | [깃허브 주소](https://github.com/leejunyong06) |  
