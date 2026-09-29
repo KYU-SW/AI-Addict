@@ -173,13 +173,6 @@ AI-Addict/
 
 ---
 
-## 📅 일정
-
-- 최종 시연·발표: **2026년 12월 (학기 말)**
-- 결정 사항·개발 단계·작업 규칙: [`docs/DECISIONS.md`](docs/DECISIONS.md)
-
----
-
 ## 👥 팀원
 
 | 이름 | GitHub |
