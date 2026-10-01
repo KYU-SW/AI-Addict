@@ -1,0 +1,6 @@
+vitaldb
+pandas
+numpy
+pyarrow
+scipy
+matplotlib
