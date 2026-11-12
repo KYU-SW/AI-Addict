@@ -13,6 +13,12 @@ AI-Addict 마취 안전감시 플랫폼 설정.
 VITALDB_CASE_IDS: list[int] = [2, 19, 36, 81]
 USE_VITALDB_REMOTE: bool = False    # True 설정 시 외부 VitalDB API 다운로드 시도 (오프라인 시연 시 False 권장)
 
+# ── 실제 케이스 재생 (1번 주자 재생기 연동) ─────────────────
+USE_REAL_CASES: bool = True                    # False면 data/replayer.py 가상 시나리오 사용
+SELECTED_CASES_CSV: str = "data/selected_cases.csv"
+CASES_DIR: str = "cases"                       # 6_download_cases.py로 받은 폴더
+REPLAY_FROM_DEMO_START: bool = True            # True: 이벤트 몇 분 전부터 / False: 수술 처음부터 전체
+
 # ── 재생 설정 ────────────────────────────────────────────────
 TICK_INTERVAL: float = 1.0          # 초 단위 갱신 주기
 DEFAULT_SPEED: int = 1              # 기본 재생 배속

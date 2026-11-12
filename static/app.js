@@ -1477,14 +1477,18 @@
     if (DOM.btnResetSim) {
       DOM.btnResetSim.addEventListener('click', resetSimulation);
     }
-    DOM.jumpButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
+    // 바로가기 버튼: 부모에 위임 → 서버에서 받아 다시 그린 버튼도 동작
+    const jumpBar = document.getElementById('scenario-jump-bar');
+    if (jumpBar) {
+      jumpBar.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-jump');
+        if (!btn) return;
         const targetTick = Number(btn.dataset.tick);
         if (!isNaN(targetTick)) {
           seekSimulation(targetTick);
         }
       });
-    });
+    }
     if (DOM.timeProgressBar) {
       DOM.timeProgressBar.addEventListener('click', (e) => {
         const rect = DOM.timeProgressBar.getBoundingClientRect();
@@ -1563,6 +1567,33 @@
   }
 
   // ── 14. 애플리케이션 부트스트랩 ───────────────────────────────────────────
+  /**
+   * 실제 케이스 재생 시 바로가기 버튼을 서버의 이상 시점 목록으로 교체.
+   * 목록이 비어 있으면(가상 데이터 모드) HTML 기본 버튼을 그대로 둠.
+   */
+  async function loadJumpPoints() {
+    const bar = document.getElementById('scenario-jump-bar');
+    if (!bar) return;
+    try {
+      const res = await fetch('/api/jump_points');
+      const data = await res.json();
+      const points = (data && data.jump_points) || [];
+      if (!points.length) return;
+      bar.innerHTML = '';
+      points.forEach((p) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-jump';
+        btn.dataset.tick = String(p.tick);
+        btn.title = `${formatTime(p.tick)} — ${p.note || ''}`;
+        btn.textContent = `${p.label} (${formatTime(p.tick)})`;
+        bar.appendChild(btn);
+      });
+    } catch (err) {
+      console.warn('[AI-Addict] 바로가기 목록 로드 실패, 기본 버튼 유지', err);
+    }
+  }
+
   function initApp() {
     console.log('[AI-Addict] Dashboard App initializing...');
     initSparklineCharts();
@@ -1572,6 +1603,7 @@
     // 초기 시스템 시간 표시
     DOM.systemTime.textContent = '00:00';
     DOM.maxTime.textContent = '/ 16:00';
+    loadJumpPoints();
 
     console.log('[AI-Addict] Dashboard App initialized successfully.');
   }
