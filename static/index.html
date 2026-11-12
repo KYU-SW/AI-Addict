@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI-Addict 마취 안전감시 플랫폼</title>
+  
+  <!-- Font: Noto Sans KR & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 최상단 헤더 바 -->
+  <header class="app-header">
+    <div class="header-brand">
+      <div class="logo-icon-wrap">
+        <svg class="pulse-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1 class="brand-title">AI-Addict <span class="brand-badge">PRO</span></h1>
+        <p class="brand-subtitle">마취 안전감시 플랫폼 · 다중 수술실 자율감시</p>
+      </div>
+    </div>
+
+    <!-- 중앙: 시스템 경과 시간, 진행률 바 및 시연용 구간 점프 컨트롤러 -->
+    <div class="header-center">
+      <div class="system-time-card">
+        <span class="time-label">모니터링 경과 시간</span>
+        <div class="time-readout">
+          <span class="time-value" id="system-time">00:00</span>
+          <span class="time-max" id="max-time">/ 16:00</span>
+        </div>
+        <span class="sim-state-badge hidden" id="sim-paused-badge">일시정지됨</span>
+      </div>
+      <div class="time-progress-bar" id="time-progress-bar" title="클릭하여 원하는 시점으로 즉시 이동">
+        <div class="time-progress-fill" id="time-progress-fill" style="width: 0%;"></div>
+      </div>
+      <div class="scenario-jump-bar" id="scenario-jump-bar" role="group" aria-label="시연 구간 바로가기">
+        <button type="button" class="btn-jump" data-tick="115" title="01:55 — 5초 뒤 BIS 65 상승, 약 35초 뒤 프로포폴 증량 제안">OR2 각성 (01:55)</button>
+        <button type="button" class="btn-jump" data-tick="285" title="04:45 — MAP 하강 중, 약 50초 뒤 레미펜타닐 감량 제안, 약 70초 뒤 주의 경보">OR1 저혈압 (04:45)</button>
+        <button type="button" class="btn-jump" data-tick="415" title="06:55 — 5초 뒤 BIS=0 발생, 뇌파(δ) 정상으로 센서 탈락 판정 → 오경보 억제">OR2 BIS=0 (06:55)</button>
+        <button type="button" class="btn-jump" data-tick="650" title="10:50 — SpO₂ 89% 하강 중, 약 50초 뒤 83% 위험 경보 및 응급 호출">OR3 저산소 (10:50)</button>
+      </div>
+    </div>
+
+    <!-- 우측 제어 및 상태 -->
+    <div class="header-controls">
+      <!-- 재생 제어 (일시정지/재개 및 리셋) -->
+      <div class="transport-control-group" role="group" aria-label="시뮬레이션 재생 제어">
+        <button type="button" class="btn-icon btn-transport" id="btn-pause-toggle" title="시뮬레이션 일시정지 / 재개">
+          <span class="icon" id="pause-icon">⏸</span>
+          <span class="btn-text" id="pause-text">일시정지</span>
+        </button>
+        <button type="button" class="btn-icon btn-transport" id="btn-reset-sim" title="처음(00:00)부터 다시 시작">
+          <span class="icon">↺</span>
+          <span class="btn-text">리셋</span>
+        </button>
+      </div>
+
+      <!-- 시뮬레이션 배속 제어기 -->
+      <div class="speed-control-group">
+        <span class="control-label">배속</span>
+        <div class="speed-buttons" role="group" aria-label="재생 배속 선택">
+          <button type="button" class="btn-speed active" data-speed="1">1x</button>
+          <button type="button" class="btn-speed" data-speed="2">2x</button>
+          <button type="button" class="btn-speed" data-speed="4">4x</button>
+          <button type="button" class="btn-speed" data-speed="8">8x</button>
+        </div>
+      </div>
+
+      <!-- 음향 토글 버튼 -->
+      <button type="button" class="btn-icon" id="btn-audio-toggle" title="경보 음향 토글 (현재: 꺼짐)">
+        <span class="icon" id="audio-icon">🔇</span>
+        <span class="btn-text">알람음</span>
+      </button>
+
+      <!-- 요약 통계 팝업 토글 버튼 -->
+      <button type="button" class="btn-summary" id="btn-summary-toggle">
+        <span class="icon">📊</span>
+        <span class="btn-text">통계 요약</span>
+      </button>
+
+      <!-- 웹소켓 연결 상태 인디케이터 -->
+      <div class="connection-status-pill" id="connection-status" title="서버 연결 상태">
+        <span class="status-dot"></span>
+        <span class="status-text" id="connection-text">연결 대기중</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- 메인 대시보드 3단 레이아웃 -->
+  <div class="dashboard-body">
+    
+    <!-- 1. 좌측 사이드바: 우선순위 패널 -->
+    <aside class="priority-sidebar" id="priority-sidebar" aria-label="수술실 우선순위 감시">
+      <div class="sidebar-header">
+        <div class="sidebar-title-wrap">
+          <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          </svg>
+          <h2 class="sidebar-title">우선순위 감시</h2>
+        </div>
+        <span class="badge-tag">실시간 순위</span>
+      </div>
+      <p class="sidebar-description">위험도 종합 점수 기반 정렬</p>
+
+      <div class="priority-list" id="priority-list">
+        <!-- JS 동적 렌더링 (초기 4개 방 기본 상태) -->
+        <div class="priority-card rank-1" data-room="1" id="priority-card-1">
+          <div class="rank-badge">1</div>
+          <div class="priority-info">
+            <div class="priority-room-title">제 1 수술실</div>
+            <div class="priority-meta">
+              <span class="priority-status-pill green">정상</span>
+              <span class="priority-score">점수: 0.0</span>
+            </div>
+          </div>
+        </div>
+        <div class="priority-card rank-2" data-room="2" id="priority-card-2">
+          <div class="rank-badge">2</div>
+          <div class="priority-info">
+            <div class="priority-room-title">제 2 수술실</div>
+            <div class="priority-meta">
+              <span class="priority-status-pill green">정상</span>
+              <span class="priority-score">점수: 0.0</span>
+            </div>
+          </div>
+        </div>
+        <div class="priority-card rank-3" data-room="3" id="priority-card-3">
+          <div class="rank-badge">3</div>
+          <div class="priority-info">
+            <div class="priority-room-title">제 3 수술실</div>
+            <div class="priority-meta">
+              <span class="priority-status-pill green">정상</span>
+              <span class="priority-score">점수: 0.0</span>
+            </div>
+          </div>
+        </div>
+        <div class="priority-card rank-4" data-room="4" id="priority-card-4">
+          <div class="rank-badge">4</div>
+          <div class="priority-info">
+            <div class="priority-room-title">제 4 수술실</div>
+            <div class="priority-meta">
+              <span class="priority-status-pill green">정상</span>
+              <span class="priority-score">점수: 0.0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="priority-footer">
+        <div class="legend-item"><span class="dot green"></span> 정상 (Green)</div>
+        <div class="legend-item"><span class="dot yellow"></span> 주의 (Yellow)</div>
+        <div class="legend-item"><span class="dot red"></span> 위험 (Red)</div>
+      </div>
+    </aside>
+
+    <!-- 2. 중앙 메인: 4개 수술실 2x2 그리드 타일 -->
+    <main class="rooms-grid" id="rooms-grid">
+      
+      <!-- 수술실 1 타일 -->
+      <section class="room-tile green" id="room-tile-1" data-room-id="1">
+        <header class="room-header">
+          <div class="room-title-group">
+            <span class="room-number-badge">OR 1</span>
+            <h3 class="room-name">제 1 수술실</h3>
+            <span class="patient-phase" id="room-phase-1">유지기</span>
+          </div>
+          <div class="room-header-status">
+            <span class="priority-chip" id="room-score-1">위험도: 0.0</span>
+            <span class="room-status-badge green" id="room-badge-1">정상</span>
+          </div>
+        </header>
+
+        <!-- 바이탈 사인 5대 핵심 지표 (대형 숫자) -->
+        <div class="vitals-display-grid">
+          <div class="vital-card vital-map" id="vital-card-1-map">
+            <div class="vital-header">
+              <span class="vital-name">MAP</span>
+              <span class="vital-unit">mmHg</span>
+            </div>
+            <div class="vital-value" id="val-1-map">--</div>
+            <div class="vital-subtext">목표 ≥ 65</div>
+          </div>
+
+          <div class="vital-card vital-hr" id="vital-card-1-hr">
+            <div class="vital-header">
+              <span class="vital-name">HR</span>
+              <span class="vital-unit">bpm</span>
+            </div>
+            <div class="vital-value" id="val-1-hr">--</div>
+            <div class="vital-subtext">정상 50~100</div>
+          </div>
+
+          <div class="vital-card vital-spo2" id="vital-card-1-spo2">
+            <div class="vital-header">
+              <span class="vital-name">SpO₂</span>
+              <span class="vital-unit">%</span>
+            </div>
+            <div class="vital-value" id="val-1-spo2">--</div>
+            <div class="vital-subtext">정상 ≥ 90</div>
+          </div>
+
+          <div class="vital-card vital-bis" id="vital-card-1-bis">
+            <div class="vital-header">
+              <span class="vital-name">BIS</span>
+              <span class="vital-unit">Index</span>
+            </div>
+            <div class="vital-value" id="val-1-bis">--</div>
+            <div class="vital-subtext">목표 40~60</div>
+          </div>
+
+          <div class="vital-card vital-etco2" id="vital-card-1-etco2">
+            <div class="vital-header">
+              <span class="vital-name">EtCO₂</span>
+              <span class="vital-unit">mmHg</span>
+            </div>
+            <div class="vital-value" id="val-1-etco2">--</div>
+            <div class="vital-subtext">정상 30~45</div>
+          </div>
+        </div>
+
+        <!-- 보조 생체 지표 스트립 -->
+        <div class="secondary-vitals-strip">
+          <div class="sec-item"><span class="sec-label">BP:</span> <span class="sec-val" id="val-1-bp">-- / --</span></div>
+          <div class="sec-item"><span class="sec-label">RR:</span> <span class="sec-val" id="val-1-rr">--</span>/min</div>
+          <div class="sec-item"><span class="sec-label">BT:</span> <span class="sec-val" id="val-1-bt">--</span>°C</div>
+          <div class="sec-item"><span class="sec-label">PIP:</span> <span class="sec-val" id="val-1-pip">--</span></div>
+        </div>
+
+        <!-- 스파크라인 트렌드 차트 (최근 60초) -->
+        <div class="sparklines-section">
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>MAP 트렌드</span>
+              <span class="sparkline-current" id="spark-val-1-map">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-1-map"></canvas>
+            </div>
+          </div>
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>HR 트렌드</span>
+              <span class="sparkline-current" id="spark-val-1-hr">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-1-hr"></canvas>
+            </div>
+          </div>
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>SpO₂ 트렌드</span>
+              <span class="sparkline-current" id="spark-val-1-spo2">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-1-spo2"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- 현재 TCI 투약 목표치 & 활성 경보 목록 -->
+        <div class="room-bottom-grid">
+          <div class="drug-targets-panel">
+            <div class="panel-subhead">현재 TCI 목표 농도</div>
+            <div class="drug-badges">
+              <div class="drug-badge propofol">
+                <span class="drug-tag">프로포폴 Ce</span>
+                <span class="drug-val" id="val-1-propofol">3.0</span>
+                <span class="drug-unit">mcg/mL</span>
+              </div>
+              <div class="drug-badge remifentanil">
+                <span class="drug-tag">레미펜타닐 Ce</span>
+                <span class="drug-val" id="val-1-remifentanil">3.0</span>
+                <span class="drug-unit">ng/mL</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="active-alerts-panel">
+            <div class="panel-subhead">활성 경보 상태</div>
+            <div class="alerts-container" id="alerts-1">
+              <span class="no-alerts-msg">✓ 정상 생체징후 유지 중</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 수술실 2 타일 -->
+      <section class="room-tile green" id="room-tile-2" data-room-id="2">
+        <header class="room-header">
+          <div class="room-title-group">
+            <span class="room-number-badge">OR 2</span>
+            <h3 class="room-name">제 2 수술실</h3>
+            <span class="patient-phase" id="room-phase-2">유지기</span>
+          </div>
+          <div class="room-header-status">
+            <span class="priority-chip" id="room-score-2">위험도: 0.0</span>
+            <span class="room-status-badge green" id="room-badge-2">정상</span>
+          </div>
+        </header>
+
+        <div class="vitals-display-grid">
+          <div class="vital-card vital-map" id="vital-card-2-map">
+            <div class="vital-header">
+              <span class="vital-name">MAP</span>
+              <span class="vital-unit">mmHg</span>
+            </div>
+            <div class="vital-value" id="val-2-map">--</div>
+            <div class="vital-subtext">목표 ≥ 65</div>
+          </div>
+
+          <div class="vital-card vital-hr" id="vital-card-2-hr">
+            <div class="vital-header">
+              <span class="vital-name">HR</span>
+              <span class="vital-unit">bpm</span>
+            </div>
+            <div class="vital-value" id="val-2-hr">--</div>
+            <div class="vital-subtext">정상 50~100</div>
+          </div>
+
+          <div class="vital-card vital-spo2" id="vital-card-2-spo2">
+            <div class="vital-header">
+              <span class="vital-name">SpO₂</span>
+              <span class="vital-unit">%</span>
+            </div>
+            <div class="vital-value" id="val-2-spo2">--</div>
+            <div class="vital-subtext">정상 ≥ 90</div>
+          </div>
+
+          <div class="vital-card vital-bis" id="vital-card-2-bis">
+            <div class="vital-header">
+              <span class="vital-name">BIS</span>
+              <span class="vital-unit">Index</span>
+            </div>
+            <div class="vital-value" id="val-2-bis">--</div>
+            <div class="vital-subtext">목표 40~60</div>
+          </div>
+
+          <div class="vital-card vital-etco2" id="vital-card-2-etco2">
+            <div class="vital-header">
+              <span class="vital-name">EtCO₂</span>
+              <span class="vital-unit">mmHg</span>
+            </div>
+            <div class="vital-value" id="val-2-etco2">--</div>
+            <div class="vital-subtext">정상 30~45</div>
+          </div>
+        </div>
+
+        <div class="secondary-vitals-strip">
+          <div class="sec-item"><span class="sec-label">BP:</span> <span class="sec-val" id="val-2-bp">-- / --</span></div>
+          <div class="sec-item"><span class="sec-label">RR:</span> <span class="sec-val" id="val-2-rr">--</span>/min</div>
+          <div class="sec-item"><span class="sec-label">BT:</span> <span class="sec-val" id="val-2-bt">--</span>°C</div>
+          <div class="sec-item"><span class="sec-label">PIP:</span> <span class="sec-val" id="val-2-pip">--</span></div>
+        </div>
+
+        <div class="sparklines-section">
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>MAP 트렌드</span>
+              <span class="sparkline-current" id="spark-val-2-map">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-2-map"></canvas>
+            </div>
+          </div>
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>HR 트렌드</span>
+              <span class="sparkline-current" id="spark-val-2-hr">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-2-hr"></canvas>
+            </div>
+          </div>
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>SpO₂ 트렌드</span>
+              <span class="sparkline-current" id="spark-val-2-spo2">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-2-spo2"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="room-bottom-grid">
+          <div class="drug-targets-panel">
+            <div class="panel-subhead">현재 TCI 목표 농도</div>
+            <div class="drug-badges">
+              <div class="drug-badge propofol">
+                <span class="drug-tag">프로포폴 Ce</span>
+                <span class="drug-val" id="val-2-propofol">3.0</span>
+                <span class="drug-unit">mcg/mL</span>
+              </div>
+              <div class="drug-badge remifentanil">
+                <span class="drug-tag">레미펜타닐 Ce</span>
+                <span class="drug-val" id="val-2-remifentanil">3.0</span>
+                <span class="drug-unit">ng/mL</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="active-alerts-panel">
+            <div class="panel-subhead">활성 경보 상태</div>
+            <div class="alerts-container" id="alerts-2">
+              <span class="no-alerts-msg">✓ 정상 생체징후 유지 중</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 수술실 3 타일 -->
+      <section class="room-tile green" id="room-tile-3" data-room-id="3">
+        <header class="room-header">
+          <div class="room-title-group">
+            <span class="room-number-badge">OR 3</span>
+            <h3 class="room-name">제 3 수술실</h3>
+            <span class="patient-phase" id="room-phase-3">유지기</span>
+          </div>
+          <div class="room-header-status">
+            <span class="priority-chip" id="room-score-3">위험도: 0.0</span>
+            <span class="room-status-badge green" id="room-badge-3">정상</span>
+          </div>
+        </header>
+
+        <div class="vitals-display-grid">
+          <div class="vital-card vital-map" id="vital-card-3-map">
+            <div class="vital-header">
+              <span class="vital-name">MAP</span>
+              <span class="vital-unit">mmHg</span>
+            </div>
+            <div class="vital-value" id="val-3-map">--</div>
+            <div class="vital-subtext">목표 ≥ 65</div>
+          </div>
+
+          <div class="vital-card vital-hr" id="vital-card-3-hr">
+            <div class="vital-header">
+              <span class="vital-name">HR</span>
+              <span class="vital-unit">bpm</span>
+            </div>
+            <div class="vital-value" id="val-3-hr">--</div>
+            <div class="vital-subtext">정상 50~100</div>
+          </div>
+
+          <div class="vital-card vital-spo2" id="vital-card-3-spo2">
+            <div class="vital-header">
+              <span class="vital-name">SpO₂</span>
+              <span class="vital-unit">%</span>
+            </div>
+            <div class="vital-value" id="val-3-spo2">--</div>
+            <div class="vital-subtext">정상 ≥ 90</div>
+          </div>
+
+          <div class="vital-card vital-bis" id="vital-card-3-bis">
+            <div class="vital-header">
+              <span class="vital-name">BIS</span>
+              <span class="vital-unit">Index</span>
+            </div>
+            <div class="vital-value" id="val-3-bis">--</div>
+            <div class="vital-subtext">목표 40~60</div>
+          </div>
+
+          <div class="vital-card vital-etco2" id="vital-card-3-etco2">
+            <div class="vital-header">
+              <span class="vital-name">EtCO₂</span>
+              <span class="vital-unit">mmHg</span>
+            </div>
+            <div class="vital-value" id="val-3-etco2">--</div>
+            <div class="vital-subtext">정상 30~45</div>
+          </div>
+        </div>
+
+        <div class="secondary-vitals-strip">
+          <div class="sec-item"><span class="sec-label">BP:</span> <span class="sec-val" id="val-3-bp">-- / --</span></div>
+          <div class="sec-item"><span class="sec-label">RR:</span> <span class="sec-val" id="val-3-rr">--</span>/min</div>
+          <div class="sec-item"><span class="sec-label">BT:</span> <span class="sec-val" id="val-3-bt">--</span>°C</div>
+          <div class="sec-item"><span class="sec-label">PIP:</span> <span class="sec-val" id="val-3-pip">--</span></div>
+        </div>
+
+        <div class="sparklines-section">
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>MAP 트렌드</span>
+              <span class="sparkline-current" id="spark-val-3-map">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-3-map"></canvas>
+            </div>
+          </div>
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>HR 트렌드</span>
+              <span class="sparkline-current" id="spark-val-3-hr">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-3-hr"></canvas>
+            </div>
+          </div>
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>SpO₂ 트렌드</span>
+              <span class="sparkline-current" id="spark-val-3-spo2">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-3-spo2"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="room-bottom-grid">
+          <div class="drug-targets-panel">
+            <div class="panel-subhead">현재 TCI 목표 농도</div>
+            <div class="drug-badges">
+              <div class="drug-badge propofol">
+                <span class="drug-tag">프로포폴 Ce</span>
+                <span class="drug-val" id="val-3-propofol">3.0</span>
+                <span class="drug-unit">mcg/mL</span>
+              </div>
+              <div class="drug-badge remifentanil">
+                <span class="drug-tag">레미펜타닐 Ce</span>
+                <span class="drug-val" id="val-3-remifentanil">3.0</span>
+                <span class="drug-unit">ng/mL</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="active-alerts-panel">
+            <div class="panel-subhead">활성 경보 상태</div>
+            <div class="alerts-container" id="alerts-3">
+              <span class="no-alerts-msg">✓ 정상 생체징후 유지 중</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 수술실 4 타일 -->
+      <section class="room-tile green" id="room-tile-4" data-room-id="4">
+        <header class="room-header">
+          <div class="room-title-group">
+            <span class="room-number-badge">OR 4</span>
+            <h3 class="room-name">제 4 수술실</h3>
+            <span class="patient-phase" id="room-phase-4">유지기</span>
+          </div>
+          <div class="room-header-status">
+            <span class="priority-chip" id="room-score-4">위험도: 0.0</span>
+            <span class="room-status-badge green" id="room-badge-4">정상</span>
+          </div>
+        </header>
+
+        <div class="vitals-display-grid">
+          <div class="vital-card vital-map" id="vital-card-4-map">
+            <div class="vital-header">
+              <span class="vital-name">MAP</span>
+              <span class="vital-unit">mmHg</span>
+            </div>
+            <div class="vital-value" id="val-4-map">--</div>
+            <div class="vital-subtext">목표 ≥ 65</div>
+          </div>
+
+          <div class="vital-card vital-hr" id="vital-card-4-hr">
+            <div class="vital-header">
+              <span class="vital-name">HR</span>
+              <span class="vital-unit">bpm</span>
+            </div>
+            <div class="vital-value" id="val-4-hr">--</div>
+            <div class="vital-subtext">정상 50~100</div>
+          </div>
+
+          <div class="vital-card vital-spo2" id="vital-card-4-spo2">
+            <div class="vital-header">
+              <span class="vital-name">SpO₂</span>
+              <span class="vital-unit">%</span>
+            </div>
+            <div class="vital-value" id="val-4-spo2">--</div>
+            <div class="vital-subtext">정상 ≥ 90</div>
+          </div>
+
+          <div class="vital-card vital-bis" id="vital-card-4-bis">
+            <div class="vital-header">
+              <span class="vital-name">BIS</span>
+              <span class="vital-unit">Index</span>
+            </div>
+            <div class="vital-value" id="val-4-bis">--</div>
+            <div class="vital-subtext">목표 40~60</div>
+          </div>
+
+          <div class="vital-card vital-etco2" id="vital-card-4-etco2">
+            <div class="vital-header">
+              <span class="vital-name">EtCO₂</span>
+              <span class="vital-unit">mmHg</span>
+            </div>
+            <div class="vital-value" id="val-4-etco2">--</div>
+            <div class="vital-subtext">정상 30~45</div>
+          </div>
+        </div>
+
+        <div class="secondary-vitals-strip">
+          <div class="sec-item"><span class="sec-label">BP:</span> <span class="sec-val" id="val-4-bp">-- / --</span></div>
+          <div class="sec-item"><span class="sec-label">RR:</span> <span class="sec-val" id="val-4-rr">--</span>/min</div>
+          <div class="sec-item"><span class="sec-label">BT:</span> <span class="sec-val" id="val-4-bt">--</span>°C</div>
+          <div class="sec-item"><span class="sec-label">PIP:</span> <span class="sec-val" id="val-4-pip">--</span></div>
+        </div>
+
+        <div class="sparklines-section">
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>MAP 트렌드</span>
+              <span class="sparkline-current" id="spark-val-4-map">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-4-map"></canvas>
+            </div>
+          </div>
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>HR 트렌드</span>
+              <span class="sparkline-current" id="spark-val-4-hr">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-4-hr"></canvas>
+            </div>
+          </div>
+          <div class="sparkline-wrapper">
+            <div class="sparkline-label">
+              <span>SpO₂ 트렌드</span>
+              <span class="sparkline-current" id="spark-val-4-spo2">--</span>
+            </div>
+            <div class="sparkline-canvas-box">
+              <canvas id="chart-4-spo2"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="room-bottom-grid">
+          <div class="drug-targets-panel">
+            <div class="panel-subhead">현재 TCI 목표 농도</div>
+            <div class="drug-badges">
+              <div class="drug-badge propofol">
+                <span class="drug-tag">프로포폴 Ce</span>
+                <span class="drug-val" id="val-4-propofol">3.0</span>
+                <span class="drug-unit">mcg/mL</span>
+              </div>
+              <div class="drug-badge remifentanil">
+                <span class="drug-tag">레미펜타닐 Ce</span>
+                <span class="drug-val" id="val-4-remifentanil">3.0</span>
+                <span class="drug-unit">ng/mL</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="active-alerts-panel">
+            <div class="panel-subhead">활성 경보 상태</div>
+            <div class="alerts-container" id="alerts-4">
+              <span class="no-alerts-msg">✓ 정상 생체징후 유지 중</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- 3. 우측 사이드바: 투약 제안 패널 -->
+    <aside class="suggestions-sidebar" id="suggestions-sidebar" aria-label="AI 투약 제안">
+      <div class="sidebar-header">
+        <div class="sidebar-title-wrap">
+          <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path>
+          </svg>
+          <h2 class="sidebar-title">AI 투약 제안</h2>
+        </div>
+        <span class="suggestions-count-badge" id="suggestions-count-badge">0건 대기</span>
+      </div>
+      <p class="sidebar-description">전문의 승인 대기 중인 약물 조정 제안</p>
+
+      <div class="suggestions-list" id="suggestions-list">
+        <!-- 대기 제안 없을 시 표시될 기본 뷰 -->
+        <div class="no-suggestions-card" id="no-suggestions-placeholder">
+          <div class="empty-icon">💊</div>
+          <div class="empty-title">대기 중인 투약 제안 없음</div>
+          <div class="empty-desc">환자 바이탈이 목표 범위 내에 있으며 즉각적인 투약 조정이 불필요합니다.</div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- 하단: 통합 이벤트 로그 타임라인 -->
+  <footer class="event-log-section" id="event-log-section">
+    <div class="log-header-bar">
+      <div class="log-title-wrap">
+        <svg class="log-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="8" y1="6" x2="21" y2="6"></line>
+          <line x1="8" y1="12" x2="21" y2="12"></line>
+          <line x1="8" y1="18" x2="21" y2="18"></line>
+          <line x1="3" y1="6" x2="3.01" y2="6"></line>
+          <line x1="3" y1="12" x2="3.01" y2="12"></line>
+          <line x1="3" y1="18" x2="3.01" y2="18"></line>
+        </svg>
+        <span class="log-title">통합 이벤트 로그 (Event Log)</span>
+        <span class="log-counter" id="log-counter">총 0건</span>
+      </div>
+
+      <!-- 로그 필터 버튼들 -->
+      <div class="log-controls">
+        <div class="log-filters">
+          <button type="button" class="btn-filter active" data-filter="all">전체</button>
+          <button type="button" class="btn-filter" data-filter="alert">경보</button>
+          <button type="button" class="btn-filter" data-filter="drug">투약</button>
+          <button type="button" class="btn-filter" data-filter="emergency">응급</button>
+        </div>
+        <button type="button" class="btn-log-action" id="btn-clear-log" title="로그 지우기">지우기</button>
+      </div>
+    </div>
+
+    <!-- 스크롤 가능한 이벤트 타임라인 컨테이너 -->
+    <div class="event-log-container" id="event-log-container">
+      <div class="event-log-empty" id="event-log-empty">
+        이벤트 로그가 여기에 실시간으로 기록됩니다.
+      </div>
+      <div class="event-log-list" id="event-log-list">
+        <!-- JS로 동적 추가 -->
+      </div>
+    </div>
+  </footer>
+
+  <!-- 통계 요약 오버레이 모달 -->
+  <div class="modal-overlay hidden" id="summary-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-icon">📊</span>
+          <h2 class="modal-title" id="modal-title">마취 감시 세션 종합 통계 보고서</h2>
+        </div>
+        <button type="button" class="btn-close-modal" id="btn-close-summary" aria-label="닫기">✕</button>
+      </div>
+
+      <div class="modal-body" id="summary-modal-body">
+        <!-- 요약 핵심 KPI 카드 그리드 -->
+        <div class="summary-kpi-grid">
+          <div class="summary-kpi-card highlight">
+            <span class="kpi-label">AI 투약 제안 일치율 (수용률)</span>
+            <div class="kpi-value-row">
+              <span class="kpi-value" id="kpi-match-rate">--</span>
+              <span class="kpi-unit">%</span>
+            </div>
+            <span class="kpi-subtext" id="kpi-match-desc">승인 건수 / 전체 제안 건수</span>
+          </div>
+
+          <div class="summary-kpi-card">
+            <span class="kpi-label">총 경보 발생 건수</span>
+            <div class="kpi-value-row">
+              <span class="kpi-value" id="kpi-total-alerts">0</span>
+              <span class="kpi-unit">건</span>
+            </div>
+            <div class="kpi-tags">
+              <span class="kpi-tag yellow" id="kpi-yellow-alerts">주의 0건</span>
+              <span class="kpi-tag red" id="kpi-red-alerts">위험 0건</span>
+            </div>
+          </div>
+
+          <div class="summary-kpi-card">
+            <span class="kpi-label">투약 제안 처리 현황</span>
+            <div class="kpi-value-row">
+              <span class="kpi-value" id="kpi-total-suggestions">0</span>
+              <span class="kpi-unit">건</span>
+            </div>
+            <div class="kpi-tags">
+              <span class="kpi-tag green" id="kpi-approved-suggestions">승인 0</span>
+              <span class="kpi-tag gray" id="kpi-rejected-suggestions">반려 0</span>
+            </div>
+          </div>
+
+          <div class="summary-kpi-card">
+            <span class="kpi-label">총 모니터링 경과 시간</span>
+            <div class="kpi-value-row">
+              <span class="kpi-value" id="kpi-elapsed-time">00:00</span>
+            </div>
+            <span class="kpi-subtext" id="kpi-ticks-count">0 / 960 틱 완료</span>
+          </div>
+        </div>
+
+        <!-- 수술실별 세부 통계 테이블 -->
+        <div class="summary-section">
+          <h4 class="summary-section-title">수술실별 세부 지표</h4>
+          <div class="table-responsive">
+            <table class="summary-table">
+              <thead>
+                <tr>
+                  <th>수술실</th>
+                  <th>상태</th>
+                  <th>현재 MAP</th>
+                  <th>현재 HR</th>
+                  <th>SpO₂</th>
+                  <th>BIS</th>
+                  <th>총 경보</th>
+                  <th>투약 제안</th>
+                  <th>최근 우선순위</th>
+                </tr>
+              </thead>
+              <tbody id="summary-table-body">
+                <tr>
+                  <td colspan="9" class="table-loading">데이터를 불러오는 중입니다...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" id="btn-refresh-summary">새로고침</button>
+        <button type="button" class="btn-primary" id="btn-confirm-summary">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 응급 상황 경보 모달 (Emergency Modal) -->
+  <div class="emergency-modal-overlay hidden" id="emergency-modal" role="alertdialog" aria-modal="true">
+    <div class="emergency-modal-card">
+      <div class="emergency-header">
+        <span class="emergency-alert-icon">🚨</span>
+        <h3 class="emergency-modal-title">응급 상황 발생 (EMERGENCY)</h3>
+      </div>
+      <div class="emergency-body">
+        <div class="emergency-room-tag" id="emergency-room-label">제 3 수술실 (OR 3)</div>
+        <p class="emergency-message-text" id="emergency-message">SpO₂ 급락 경보 발생! 즉시 환자 기도 및 환기 상태를 확인하십시오.</p>
+        <div class="emergency-timestamp" id="emergency-time">발생 시각: --:--</div>
+      </div>
+      <div class="emergency-footer">
+        <button type="button" class="btn-emergency-dismiss" id="btn-emergency-dismiss">상황 인지 및 경보 해제 (Acknowledge)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 토스트 알림 컨테이너 -->
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+  <!-- 애플리케이션 스크립트 -->
+  <script src="app.js"></script>
+</body>
+</html>
