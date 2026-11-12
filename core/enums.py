@@ -21,6 +21,8 @@ class EventType(str, Enum):
     VITAL_UPDATE = "vital_update"
     ALERT = "alert"
     ALERT_CLEARED = "alert_cleared"
+    SENSOR_ALERT = "sensor_alert"
+    SENSOR_CLEARED = "sensor_cleared"
     DRUG_SUGGESTION = "drug_suggestion"
     SUGGESTION_CANCELLED = "suggestion_cancelled"
     APPROVAL_REQUEST = "approval_request"

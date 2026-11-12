@@ -588,18 +588,32 @@ async def _clear_transient_agent_states(reset_drugs: bool = False) -> None:
             supervisor._prev_severity = {rid: 0.0 for rid in supervisor.room_ids}
         if hasattr(supervisor, "_pending_suggestions"):
             supervisor._pending_suggestions.clear()
+        if reset_drugs:
+            if hasattr(supervisor, "_ppf_initialized"):
+                supervisor._ppf_initialized = {rid: False for rid in supervisor.room_ids}
+            if hasattr(supervisor, "_rftn_initialized"):
+                supervisor._rftn_initialized = {rid: False for rid in supervisor.room_ids}
 
     for rm in room_monitors.values():
-        if hasattr(rm, "active_alerts"):
-            rm.active_alerts.clear()
-        if hasattr(rm, "_history"):
-            rm._history.clear()
-        if hasattr(rm, "_spike_counts"):
-            rm._spike_counts.clear()
-        if hasattr(rm, "_yellow_start_times"):
-            rm._yellow_start_times.clear()
-        if hasattr(rm, "current_alert_level"):
-            rm.current_alert_level = AlertLevel.GREEN
+        if hasattr(rm, "reset"):
+            rm.reset()
+        else:
+            if hasattr(rm, "active_alerts"):
+                rm.active_alerts.clear()
+            if hasattr(rm, "sensor_issues"):
+                rm.sensor_issues.clear()
+            if hasattr(rm, "_history"):
+                rm._history.clear()
+            if hasattr(rm, "_spike_counts"):
+                rm._spike_counts.clear()
+            if hasattr(rm, "_pending_spikes"):
+                rm._pending_spikes.clear()
+            if hasattr(rm, "_yellow_start_times"):
+                rm._yellow_start_times.clear()
+            if hasattr(rm, "_beta_baseline_samples"):
+                rm._beta_baseline_samples.clear()
+            if hasattr(rm, "current_alert_level"):
+                rm.current_alert_level = AlertLevel.GREEN
 
     for ma in medication_agents.values():
         if reset_drugs and hasattr(ma, "reset"):

@@ -129,6 +129,14 @@ class RecorderAgent(BaseAgent):
             msg = data.get("message", f"{data.get('parameter', '')} 해제")
             return f"수술실 {room_id} [경보 해제] {msg}"
 
+        if event.type == EventType.SENSOR_ALERT:
+            msg = data.get("message", "센서 확인 필요")
+            return f"수술실 {room_id} [센서 점검] {msg}"
+
+        if event.type == EventType.SENSOR_CLEARED:
+            msg = data.get("message", "센서 신호 복구")
+            return f"수술실 {room_id} [센서 복구] {msg}"
+
         if event.type == EventType.DRUG_SUGGESTION:
             raw_drug = data.get("drug_type", "")
             drug = raw_drug.value if hasattr(raw_drug, "value") else str(raw_drug)

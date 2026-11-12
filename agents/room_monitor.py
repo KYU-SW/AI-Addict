@@ -41,14 +41,23 @@ class RoomMonitorAgent(BaseAgent):
         # 최근 10개 유효 측정값 슬라이딩 윈도우 (파라미터별)
         self._history: Dict[str, Deque[float]] = collections.defaultdict(lambda: collections.deque(maxlen=10))
 
-        # 잡음 연속 틱 카운터 (파라미터별)
+        # 잡음 연속 틱 카운터 및 보류 값 버퍼 (지속 급변 시 기준선 즉시 동기화용)
         self._spike_counts: Dict[str, int] = collections.defaultdict(int)
+        self._pending_spikes: Dict[str, Deque[float]] = collections.defaultdict(
+            lambda: collections.deque(maxlen=10)
+        )
 
         # 주의(YELLOW) 상태 지속 시작 시각 기록 (파라미터별)
         self._yellow_start_times: Dict[str, float] = {}
 
         # 현재 활성화된 경보 목록 (파라미터명 -> Alert 객체)
         self.active_alerts: Dict[str, Alert] = {}
+
+        # 현재 활성화된 센서 확인 필요 이슈 (파라미터명 -> 설명 메시지)
+        self.sensor_issues: Dict[str, str] = {}
+
+        # 환자 초기 정상 상태의 EEG β파 기저치 기록 (%)
+        self._beta_baseline_samples: Deque[float] = collections.deque(maxlen=30)
 
         # 현재 방의 종합 경보 수준
         self.current_alert_level: AlertLevel = AlertLevel.GREEN
@@ -72,10 +81,22 @@ class RoomMonitorAgent(BaseAgent):
         ]
 
         for param_name, raw_val in params_to_check:
+            # 2-A. BIS 전용 SQI(신호품질지수) 사전 게이트 (Step 1: bis가 None이어도 SQI 불량이면 즉시 감지)
+            if param_name == "bis" and vitals.sqi is not None and vitals.sqi < config.SQI_THRESHOLD:
+                self._yellow_start_times.pop("bis", None)
+                if "bis" in self.active_alerts:
+                    await self._handle_alert_state("bis", 0.0, AlertLevel.GREEN, 0.0, "", timestamp)
+                await self._set_sensor_issue(
+                    "bis",
+                    f"센서 확인 필요: BIS 신호품질 저하 (SQI={vitals.sqi:.0f}% < {config.SQI_THRESHOLD:.0f}%)",
+                    timestamp,
+                )
+                continue
+
             if raw_val is None:
                 continue
 
-            # 2. 잡음(Spike) 필터링
+            # 2-B. 잡음(Spike) 및 생리학적 이상치 필터링
             # 단, BIS == 0은 센서 탈락/뇌파 억제 감별 로직에서 처리하므로 일반 잡음 필터에서 건너뜀
             if param_name == "bis" and raw_val == 0.0:
                 is_noise = False
@@ -85,8 +106,18 @@ class RoomMonitorAgent(BaseAgent):
             if is_noise:
                 continue
 
-            # 3. 임계값 검사 및 이상 판별
+            # 3. 임계값 검사 및 이상 판별 (BIS=0 감별 및 EEG β파 보조 판정 포함)
             level, threshold, msg = self._evaluate_threshold(param_name, raw_val, vitals)
+
+            # BIS==0에서 센서 불량으로 판정된 경우 (threshold < 0 표기): 기존 생리 경보 정리 후 센서 알림 발행
+            if param_name == "bis" and threshold < 0.0:
+                self._yellow_start_times.pop("bis", None)
+                if "bis" in self.active_alerts:
+                    await self._handle_alert_state("bis", 0.0, AlertLevel.GREEN, 0.0, "", timestamp)
+                await self._set_sensor_issue("bis", msg, timestamp)
+                continue
+            elif param_name == "bis":
+                await self._clear_sensor_issue("bis", timestamp)
 
             # 4. 1분 지속성 규칙 및 경보 발령/해제 처리
             await self._handle_alert_state(param_name, raw_val, level, threshold, msg, timestamp)
@@ -100,21 +131,33 @@ class RoomMonitorAgent(BaseAgent):
             **vitals_dict,
             "vitals": vitals_dict,
             "alert_level": self.current_alert_level.value,
+            "sensor_problem": bool(self.sensor_issues),
+            "sensor_issues": list(self.sensor_issues.values()),
         }
         await self.emit(EventType.VITAL_UPDATE, payload, timestamp)
 
     def _check_noise_spike(self, param_name: str, val: float) -> bool:
-        """최근 10초 중앙값 대비 30% 급변(스파이크 잡음) 여부를 판정합니다.
+        """생리학적 불가능 범위 및 최근 10초 중앙값 대비 30% 급변(스파이크 잡음) 여부를 판정합니다.
 
-        지속 시간이 config.NOISE_RECOVERY_SEC(5초) 이하이면 잡음으로 무시하고,
-        5초를 초과하여 지속되면 실제 생체신호 변화로 간주하여 수용합니다.
+        - MAP < 20 또는 > 200 mmHg 등 아티팩트는 즉시 잡음으로 기각합니다.
+        - 30% 이상 급변이 config.NOISE_RECOVERY_SEC(5초) 이하이면 잡음으로 무시하되,
+          임시 버퍼(_pending_spikes)에 보관합니다.
+        - 5초를 초과하여 지속되면 실제 급변(예: MAP 90 -> 54)으로 인정하고
+          기존 히스토리를 버퍼 값들로 즉시 교체하여 30초 지연을 방지합니다.
         """
+        # 1. 생리학적 불가능 아티팩트 즉시 기각 (동맥관 플러싱/영점조절 잡음, D-09)
+        if param_name == "map" and (val < config.MAP_OUTLIER_LOW or val > config.MAP_OUTLIER_HIGH):
+            self.logger.debug("[Room %d] MAP 아티팩트 수치 무시: %.1f mmHg", self.room_id, val)
+            return True
+
         history = self._history[param_name]
+        pending = self._pending_spikes[param_name]
 
         if len(history) >= 3:
             median_val = statistics.median(history)
             if median_val > 0 and (abs(val - median_val) / median_val) > config.NOISE_SPIKE_RATIO:
                 self._spike_counts[param_name] += 1
+                pending.append(val)
                 if self._spike_counts[param_name] <= config.NOISE_RECOVERY_SEC:
                     self.logger.debug(
                         "[Room %d] 잡음 스파이크 무시: %s=%.1f (중앙값=%.1f, %d/%d초)",
@@ -127,15 +170,57 @@ class RoomMonitorAgent(BaseAgent):
                     )
                     return True
                 else:
-                    # 5초 이상 지속된 변화는 실제 상태 변화로 인정
+                    # 5초 이상 지속된 변화는 실제 상태 변화로 즉시 인정하고 기준선 동기화
+                    history.clear()
+                    history.extend(pending)
+                    pending.clear()
                     self._spike_counts[param_name] = 0
-                    history.append(val)
                     return False
 
-        # 정상치 또는 윈도우 채우는 중
+        # 정상치 복귀 또는 초기 윈도우 채우는 중
         self._spike_counts[param_name] = 0
+        pending.clear()
         history.append(val)
         return False
+
+    @staticmethod
+    def _to_pct(val: Optional[float]) -> Optional[float]:
+        """0~1 비율 또는 0~100% 스케일의 뇌파 대역 값을 0~100(%) 단위로 정규화합니다."""
+        if val is None:
+            return None
+        return val * 100.0 if 0.0 < val <= 1.0 else float(val)
+
+    async def _set_sensor_issue(self, param_name: str, message: str, timestamp: float) -> None:
+        """센서 확인 필요 상태를 등록하고 최초 발생 시 SENSOR_ALERT 이벤트를 발행합니다."""
+        prev = self.sensor_issues.get(param_name)
+        self.sensor_issues[param_name] = message
+        if prev != message:
+            self.logger.info("[Room %d] %s", self.room_id, message)
+            await self.emit(
+                EventType.SENSOR_ALERT,
+                {
+                    "room_id": self.room_id,
+                    "parameter": param_name,
+                    "message": message,
+                    "timestamp": timestamp,
+                },
+                timestamp,
+            )
+
+    async def _clear_sensor_issue(self, param_name: str, timestamp: float) -> None:
+        """센서 신호가 정상 복구되면 이슈를 해제하고 SENSOR_CLEARED 이벤트를 발행합니다."""
+        if param_name in self.sensor_issues:
+            self.sensor_issues.pop(param_name, None)
+            await self.emit(
+                EventType.SENSOR_CLEARED,
+                {
+                    "room_id": self.room_id,
+                    "parameter": param_name,
+                    "message": f"{param_name.upper()} 센서 신호 정상 복구",
+                    "timestamp": timestamp,
+                },
+                timestamp,
+            )
 
     def _evaluate_threshold(
         self,
@@ -177,27 +262,59 @@ class RoomMonitorAgent(BaseAgent):
             if val > config.HR_WARNING_HIGH:
                 return AlertLevel.YELLOW, config.HR_WARNING_HIGH, f"HR 주의 빈맥: {val:.1f} bpm (> {config.HR_WARNING_HIGH})"
 
-        # ── BIS (마취 심도 지수) ──
+        # ── BIS (마취 심도 지수) + SQI/SR/EEG 3단계 감별 ──
         elif param_name == "bis":
+            delta_pct = self._to_pct(vitals.eeg_delta)
+            beta_pct = self._to_pct(vitals.eeg_beta)
+
             if val == 0.0:
-                # BIS 0 검출: EEG delta 파워 검사로 센서 탈락 여부 감별
-                delta_pwr = vitals.eeg_delta if vitals.eeg_delta is not None else 0.0
-                if delta_pwr >= 0.3:  # 뇌파 서파 활동이 감지되면 센서 접촉 불량(Artifact)
-                    self.logger.info(
-                        "[Room %d] BIS=0 감지되었으나 EEG δ 파워(%.2f >= 0.3) 정상 유지 → 센서 탈락 판정(경보 무시)",
-                        self.room_id,
-                        delta_pwr,
-                    )
-                    return AlertLevel.GREEN, 0.0, ""
+                # Step 2: BIS == 0 감별
+                # - SQI < 50 이거나
+                # - SR(돌발억제비율)이 명시적으로 < 40% (실제 등전위 뇌파 억제가 아님) 이거나
+                # - SR이 없더라도 δ파가 30% 이상 살아있는 경우 -> 센서 이상("센서 확인 필요")
+                sqi_bad = vitals.sqi is not None and vitals.sqi < config.SQI_THRESHOLD
+                sr_explicitly_normal = vitals.sr is not None and vitals.sr < config.SR_SUPPRESSION_THRESHOLD
+                sr_not_suppressed = vitals.sr is None or vitals.sr < config.SR_SUPPRESSION_THRESHOLD
+                delta_alive = delta_pct is not None and delta_pct >= config.EEG_DELTA_ACTIVITY_MIN
+
+                if sqi_bad or sr_explicitly_normal or (sr_not_suppressed and delta_alive):
+                    if vitals.sqi is not None:
+                        detail = f"SQI={vitals.sqi:.0f}%"
+                    elif delta_pct is not None:
+                        detail = f"δ={delta_pct:.1f}%"
+                    else:
+                        detail = f"SR={vitals.sr:.0f}%"
+                    # threshold=-1.0을 반환하여 호출부에서 침묵하지 않고 SENSOR_ALERT("센서 확인 필요")를 띄우도록 처리
+                    return AlertLevel.GREEN, -1.0, f"센서 확인 필요: BIS=0 감지 ({detail}, 센서 탈락/신호 불량 의심)"
                 else:
-                    return AlertLevel.RED, config.BIS_DEEP_WARNING, f"BIS 위험 극저하 (뇌파 억제): {val:.1f} (δ={delta_pwr:.2f})"
+                    sr_info = f", SR={vitals.sr:.0f}%" if vitals.sr is not None else ""
+                    delta_info = f", δ={delta_pct:.1f}%" if delta_pct is not None else ""
+                    return (
+                        AlertLevel.RED,
+                        config.BIS_DEEP_WARNING,
+                        f"BIS 위험 극저하 (뇌파 억제): {val:.1f} ({sr_info.lstrip(', ')}{delta_info})",
+                    )
+
+            # 정상 마취 유지 범위(40~60)일 때 환자 β파 기저치 누적
+            if config.BIS_TARGET_LOW <= val <= config.BIS_TARGET_HIGH and beta_pct is not None:
+                self._beta_baseline_samples.append(beta_pct)
 
             if val < config.BIS_DEEP_WARNING:
                 return AlertLevel.RED, config.BIS_DEEP_WARNING, f"BIS 위험 과진정: {val:.1f} (< {config.BIS_DEEP_WARNING})"
             if val < config.BIS_TARGET_LOW:
                 return AlertLevel.YELLOW, config.BIS_TARGET_LOW, f"BIS 주의 과진정: {val:.1f} (< {config.BIS_TARGET_LOW})"
             if val > config.BIS_TARGET_HIGH:
-                return AlertLevel.YELLOW, config.BIS_TARGET_HIGH, f"BIS 주의 각성 위험: {val:.1f} (> {config.BIS_TARGET_HIGH})"
+                # Step 3: BIS > 60 각성 경향 시 EEG β파(13~30Hz) 상승 동반 여부 보조 판정
+                beta_note = ""
+                if beta_pct is not None and len(self._beta_baseline_samples) >= 5:
+                    base_beta = statistics.median(self._beta_baseline_samples)
+                    if beta_pct >= base_beta + config.EEG_BETA_SURGE_DELTA:
+                        beta_note = f", EEG β파 상승 동반({base_beta:.1f}%→{beta_pct:.1f}%)"
+                return (
+                    AlertLevel.YELLOW,
+                    config.BIS_TARGET_HIGH,
+                    f"BIS 주의 각성 위험: {val:.1f} (> {config.BIS_TARGET_HIGH}{beta_note})",
+                )
 
         # ── EtCO2 (호기말 이산화탄소 분압) ──
         elif param_name == "etco2":
@@ -329,3 +446,14 @@ class RoomMonitorAgent(BaseAgent):
             self.current_alert_level = AlertLevel.YELLOW
         else:
             self.current_alert_level = AlertLevel.GREEN
+
+    def reset(self) -> None:
+        """타임라인 점프(seek) 또는 리셋 시 모든 일시적 감시 상태, 버퍼, 센서 이슈를 초기화합니다."""
+        self.active_alerts.clear()
+        self.sensor_issues.clear()
+        self._history.clear()
+        self._spike_counts.clear()
+        self._pending_spikes.clear()
+        self._yellow_start_times.clear()
+        self._beta_baseline_samples.clear()
+        self.current_alert_level = AlertLevel.GREEN

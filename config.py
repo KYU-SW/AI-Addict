@@ -23,6 +23,9 @@ MAP_WARNING_LOW: float = 65.0
 MAP_CRITICAL_LOW: float = 55.0
 MAP_WARNING_HIGH: float = 110.0
 MAP_CRITICAL_HIGH: float = 130.0
+MAP_OUTLIER_LOW: float = 20.0       # 생리학적 불가능 하한 (동맥관 플러싱/영점조절 잡음)
+MAP_OUTLIER_HIGH: float = 200.0     # 생리학적 불가능 상한 (동맥관 플러싱 잡음, D-09)
+MAP_HYPERTENSION_RATIO: float = 1.20  # 환자 기저치 대비 +20% 상승 시 고혈압 기준
 
 # ── Heart Rate (회/분) ────────────────────────────────────────
 HR_WARNING_LOW: float = 50.0
@@ -34,10 +37,14 @@ HR_CRITICAL_HIGH: float = 120.0
 SPO2_WARNING: float = 90.0
 SPO2_CRITICAL: float = 85.0
 
-# ── BIS (Bispectral Index) ────────────────────────────────────
+# ── BIS & EEG 신호 품질 ───────────────────────────────────────
 BIS_TARGET_LOW: float = 40.0
 BIS_TARGET_HIGH: float = 60.0
 BIS_DEEP_WARNING: float = 30.0
+SQI_THRESHOLD: float = 50.0              # 신호품질지수(SQI) 50% 미만 시 센서 불량 판정
+SR_SUPPRESSION_THRESHOLD: float = 40.0   # 돌발억제비율(SR) 40% 이상 시 실제 뇌파 억제 의심
+EEG_DELTA_ACTIVITY_MIN: float = 30.0     # δ파 비율(%) 30% 이상이면 뇌파 활동 존재로 판정
+EEG_BETA_SURGE_DELTA: float = 10.0       # 기저치 대비 β파 비율 +10%p 이상 상승 시 각성파 동반 판정
 
 # ── EtCO₂ (mmHg) ──────────────────────────────────────────────
 ETCO2_WARNING_LOW: float = 30.0
@@ -54,16 +61,21 @@ NOISE_SPIKE_RATIO: float = 0.3     # 30 % 급변 = 잡음 의심
 NOISE_RECOVERY_SEC: int = 5        # 잡음 복귀 판정 시간 (초)
 
 # ── 투약 제안 ──────────────────────────────────────────────────
-DRUG_UNIT: float = 0.5             # 0.5 단위 증감
-PROPOFOL_CE_MIN: float = 1.0      # 프로포폴 Ce 하한 (mcg/mL)
-PROPOFOL_CE_MAX: float = 6.0      # 프로포폴 Ce 상한
-REMIFENTANIL_CE_MIN: float = 0.5  # 레미펜타닐 Ce 하한 (ng/mL)
-REMIFENTANIL_CE_MAX: float = 8.0  # 레미펜타닐 Ce 상한
+DRUG_UNIT: float = 0.5             # 기본 0.5 단위 증감 (호환용)
+PROPOFOL_STEP: float = 0.5         # 프로포폴 증감 단위 (0.3~0.5 mcg/mL)
+REMIFENTANIL_STEP: float = 0.5     # 레미펜타닐 증감 단위 (0.5 ng/mL)
+PROPOFOL_CE_MIN: float = 1.0       # 프로포폴 Ce 하한 (mcg/mL)
+PROPOFOL_CE_MAX: float = 6.0       # 프로포폴 Ce 상한
+REMIFENTANIL_CE_MIN: float = 2.0   # 레미펜타닐 Ce 하한 (ng/mL, 문헌 기준 각성 예방 하한 반영)
+REMIFENTANIL_CE_MAX: float = 8.0   # 레미펜타닐 Ce 상한
 
-# ── 우선순위 가중치 ──────────────────────────────────────────
-PRIORITY_W_SEVERITY: float = 3.0   # 심각도 가중치
-PRIORITY_W_DURATION: float = 1.0   # 지속 시간 가중치
-PRIORITY_W_TREND: float = 2.0     # 추세 가중치
+# ── 우선순위 가중치 (계층 분리 + 분 단위 상한) ─────────────────
+PRIORITY_BASE_RED: float = 100.0         # RED 기본 점수 (YELLOW가 절대 역전 불가)
+PRIORITY_BASE_YELLOW: float = 20.0       # YELLOW 기본 점수
+PRIORITY_W_SEVERITY: float = 3.0         # 하위 호환용 가중치
+PRIORITY_W_DURATION: float = 2.0         # 분(minute)당 지속시간 가중치
+PRIORITY_DURATION_MAX_BONUS: float = 15.0  # 지속시간 보너스 상한 (최대 15점)
+PRIORITY_W_TREND: float = 5.0            # 추세 가중치 (악화 +5, 호전 -5)
 
 # ── VitalDB 트랙 이름 ─────────────────────────────────────────
 VITAL_TRACKS: dict[str, str] = {
