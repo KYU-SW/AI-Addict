@@ -1,6 +1,13 @@
+# 데이터 선정 및 리플레이어 (기존 패키지)
+vitaldb>=1.2.0
+pandas
+numpy>=1.24.0
+pyarrow
+scipy
+matplotlib
+
+# 다중 에이전트 서버 및 실시간 대시보드
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 websockets>=12.0
 pydantic>=2.5.0
-numpy>=1.24.0
-vitaldb>=1.2.0

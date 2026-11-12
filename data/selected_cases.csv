@@ -1,0 +1,7 @@
+room,type,caseid,event_onset_s,demo_start_s,opstart_s,opend_s,department,optype,age,sex,note
+OR-1,stable,2421,5998.0,5818.0,2105,13505,General surgery,Stomach,72,M,동맥압 라인 순간 튐(16초) - 걸러내기 시연
+OR-2,stable,3763,11519.0,11099.0,2940,15240,General surgery,Stomach,70,M,BIS 순간 0 + SQI 0(약 47초) - 걸러내기 시연
+OR-3,hypotension,2680,13838.0,13538.0,3578,15398,Thoracic surgery,Minor resection,78,M,"MAP 90대→최저 54, 약 5분 지속"
+OR-4,bis_excursion,3680,8510.0,7970.0,4610,10534,Thoracic surgery,Major resection,67,F,"BIS 최대 77, 약 7분 지속, 혈압 정상"
+RESERVE,sensor_noise,6185,6528.0,,3828,13428,General surgery,Vascular,76,F,SQI 0 + BIS 0 + 동맥압 flush
+RESERVE,stable,287,,,2272,8872,General surgery,Others,58,M,가장 깨끗한 안정 케이스

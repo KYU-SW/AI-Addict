@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI-Addict 재생기 확인 화면</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#eef2f4; --panel:#ffffff; --ink:#14212b; --muted:#566673; --line:#d3dbe0; --glass:#f6f9fa;
+  --warn:#b86e00; --crit:#c62828; --ok:#12824a; --filter:#566673; --accent:#0b79b8;
+  /* 모니터 본체는 실제 장비처럼 항상 어두운 화면 */
+  --mon:#05090d; --mon2:#0c141b; --monline:#1d2a35; --monmuted:#7f8f9b; --monink:#e8eef2;
+  --ecg:#4ade80; --art:#ff5a5a; --pleth:#38bdf8; --co2:#facc15; --awp:#e5e7eb; --bt:#fb923c;
+  --bis:#c4b5fd; --eeg:#f5f5f4; --delta:#60a5fa; --alpha:#34d399; --beta:#f472b6; --drug:#a3e635;
+  --num:"Barlow Condensed","Arial Narrow","Roboto Condensed",sans-serif;
+  --txt:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e161d; --panel:#15212b; --ink:#e4ebf0; --muted:#8b9ba7; --line:#243442; --glass:#101b24;
+    --warn:#f5a524; --crit:#ff5252; --ok:#4ade80; --filter:#8b9ba7; --accent:#38bdf8;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e161d; --panel:#15212b; --ink:#e4ebf0; --muted:#8b9ba7; --line:#243442; --glass:#101b24;
+  --warn:#f5a524; --crit:#ff5252; --ok:#4ade80; --filter:#8b9ba7; --accent:#38bdf8;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:15px/1.5 var(--txt)}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1400px;margin:0 auto;padding:16px 20px 28px}
+
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 24px;margin-bottom:12px}
+h1{font-size:20px;font-weight:600;margin:0}
+.sub{margin:2px 0 0;color:var(--muted);font-size:13.5px;max-width:64ch}
+.ctrl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.clock{font-family:var(--num);font-size:34px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums;min-width:5.2ch;text-align:right}
+.clock small{font-size:16px;color:var(--muted);font-weight:500}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 14px;cursor:pointer;font-weight:500}
+.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);min-width:84px}
+.speed{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.speed button{border:0;background:var(--panel);padding:7px 10px;cursor:pointer;font-family:var(--num);font-size:16px;font-weight:600}
+.speed button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+
+h2.sec{font-size:13px;font-weight:600;color:var(--muted);margin:0 0 6px;letter-spacing:.02em}
+/* 중앙 감시: 4개 방 */
+.rooms{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+@media (max-width:900px){.rooms{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.room{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px 10px;cursor:pointer;text-align:left}
+.room[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--ink)}
+.room.raw{border-color:var(--warn);box-shadow:inset 4px 0 0 var(--warn)}
+.room.raw[aria-pressed="true"]{box-shadow:inset 4px 0 0 var(--warn),inset 0 0 0 2px var(--ink)}
+.rhead{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.rname{font-family:var(--num);font-size:21px;font-weight:600;white-space:nowrap}
+.rcase{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vals{display:grid;grid-template-columns:repeat(4,1fr);gap:0 6px;margin-top:2px}
+.v span{display:block;font-size:11px;color:var(--muted)}
+.v b{font-family:var(--num);font-weight:600;font-size:28px;line-height:1.05;font-variant-numeric:tabular-nums}
+.chips{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;min-height:20px}
+.chip{font-size:11px;border:1px solid var(--warn);color:var(--warn);border-radius:99px;padding:0 7px;white-space:nowrap}
+
+/* 수술방 모니터 */
+.monitor{background:var(--mon);color:var(--monink);border-radius:12px;padding:10px 12px 12px;border:1px solid #111b23}
+.mhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;padding:0 2px 6px;border-bottom:1px solid var(--monline)}
+.mhead b{font-size:15px}
+.mhead span{font-size:12.5px;color:var(--monmuted)}
+.mgrid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:10px;margin-top:8px}
+@media (max-width:900px){.mgrid{grid-template-columns:1fr}}
+.waves{min-width:0}
+.strip{display:grid;grid-template-columns:70px minmax(0,1fr);align-items:center;border-top:1px solid var(--monline);padding:2px 0}
+.strip:first-child{border-top:0}
+.strip label{font-size:12px;line-height:1.2}
+.strip label b{display:block;font-size:13px;font-weight:600}
+.strip label small{color:var(--monmuted);font-size:11px}
+canvas{display:block;width:100%}
+.strip canvas{height:64px}
+.params{display:grid;grid-template-columns:1fr 1fr;gap:6px;align-content:start}
+.p{background:var(--mon2);border:1px solid var(--monline);border-radius:8px;padding:5px 9px 6px;min-width:0}
+.p.wide{grid-column:span 2}
+.p.alarm{border-color:#f5a524;box-shadow:inset 0 0 0 1px #f5a524}
+.p .lab{display:flex;justify-content:space-between;font-size:12px;font-weight:600}
+.p .lab small{color:var(--monmuted);font-weight:400}
+.p .big{font-family:var(--num);font-weight:600;font-size:44px;line-height:1;font-variant-numeric:tabular-nums;white-space:nowrap}
+.p .big small{font-size:22px}
+.p .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:12px;color:var(--monmuted)}
+.p .row b{font-family:var(--num);font-size:22px;color:var(--monink);font-weight:600}
+
+.lower{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:10px;margin-top:10px}
+@media (max-width:900px){.lower{grid-template-columns:1fr}}
+.module{background:var(--mon2);border:1px solid var(--monline);border-radius:8px;padding:8px 10px}
+.module h3{margin:0 0 4px;font-size:12.5px;font-weight:600;color:var(--bis);display:flex;justify-content:space-between;gap:8px}
+.module h3 span{color:var(--monmuted);font-weight:400}
+.bisgrid{display:grid;grid-template-columns:minmax(0,1fr) 200px;gap:10px}
+@media (max-width:620px){.bisgrid{grid-template-columns:1fr}}
+.bisnum{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;align-content:start}
+.bisnum .main{grid-column:span 2;font-family:var(--num);font-size:52px;font-weight:600;color:var(--bis);line-height:1}
+.bisnum .main small{font-size:15px;color:var(--monmuted);font-weight:500;margin-left:6px}
+.kv{display:flex;justify-content:space-between;font-size:12px;color:var(--monmuted)}
+.kv b{font-family:var(--num);font-size:19px;color:var(--monink);font-weight:600}
+.bars{grid-column:span 2;margin-top:6px}
+.bar{display:grid;grid-template-columns:38px 1fr 34px;align-items:center;gap:6px;font-size:12px;margin-top:3px}
+.bar i{display:block;height:9px;border-radius:5px;background:var(--monline);overflow:hidden}
+.bar i u{display:block;height:100%;text-decoration:none}
+.bar b{font-family:var(--num);font-size:16px;text-align:right}
+.machine{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
+.machine .kv b{font-size:21px}
+.module.alarm{border-color:#f5a524;box-shadow:inset 0 0 0 1px #f5a524}
+.machine hr{grid-column:span 2;border:0;border-top:1px solid var(--monline);margin:4px 0}
+
+.timeline{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px 14px}
+.tl-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.tl-head h2{margin:0;font-size:16px;font-weight:600}
+.tl-head p{margin:0;font-size:12.5px;color:var(--muted);max-width:70ch}
+.tl-body{position:relative;margin-top:44px}
+.marks{position:absolute;left:0;right:0;top:-40px;height:40px}
+.mark{position:absolute;transform:translateX(-50%);border:0;background:none;padding:0;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px}
+.mark .dot{width:12px;height:12px;border-radius:50%;border:2px solid var(--panel);box-shadow:0 0 0 1px var(--line)}
+.mark.real .dot{background:var(--crit)} .mark.filter .dot{background:var(--filter)} .mark.recover .dot{background:var(--ok)}
+.mark .lab{font-family:var(--num);font-size:14px;font-weight:600;line-height:1}
+.mark[data-row="1"]{top:14px}
+.heat{height:40px;border-radius:6px;background:var(--glass);border:1px solid var(--line)}
+input[type=range]{width:100%;margin:8px 0 0;accent-color:var(--ink)}
+.evlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:6px 18px;margin:12px 0 0;padding:0;list-style:none}
+.evlist li button{width:100%;text-align:left;border:0;background:none;padding:4px 0;cursor:pointer;display:grid;grid-template-columns:44px 42px 1fr;gap:6px;align-items:baseline;border-bottom:1px dashed var(--line)}
+.evlist .t{font-family:var(--num);font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.evlist .r{font-family:var(--num);font-size:15px;color:var(--muted)}
+.evlist .d{font-size:13px}
+.evlist .k{font-size:11.5px;color:var(--muted);display:block}
+.evlist li.real .t{color:var(--crit)} .evlist li.recover .t{color:var(--ok)}
+.foot{margin-top:14px;font-size:12.5px;color:var(--muted);max-width:95ch}
+.foot p{margin:4px 0}
+@media (max-width:560px){.rcase{display:none}.v b{font-size:21px}.vals{gap:0 3px}.room{padding:8px 9px}.rooms{gap:8px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>재생기 확인 화면</h1>
+    <p class="sub">VitalDB 수술 기록 4건을 가상 수술방으로 동시에 재생합니다. 위는 4개 방을 한눈에 보는 중앙 감시, 아래는 선택한 방의 수술방 모니터입니다. 감시 에이전트는 아직 적용하지 않았습니다.</p>
+  </div>
+  <div class="ctrl">
+    <div class="clock" id="clock">00:00<small> / 16:00</small></div>
+    <button class="btn primary" id="play">재생</button>
+    <div class="speed" role="group" aria-label="재생 속도" id="speed"></div>
+    <button class="btn" id="theme" aria-label="밝기 전환">화면 밝기</button>
+  </div>
+</header>
+
+<h2 class="sec">중앙 감시 · 4개 방</h2>
+<section class="rooms" id="rooms" aria-label="수술방 4개"></section>
+
+<h2 class="sec" id="monTitle">수술방 모니터</h2>
+<section class="monitor" aria-label="선택한 방의 수술방 모니터">
+  <div class="mhead"><b id="mRoom">OR-3</b><span id="mInfo"></span></div>
+  <div class="mgrid">
+    <div class="waves" id="waves"></div>
+    <div class="params" id="params">
+      <div class="p" id="pHR"><div class="lab" style="color:var(--ecg)">HR <small>회/분</small></div><div class="big" style="color:var(--ecg)">--</div></div>
+      <div class="p" id="pSpO2"><div class="lab" style="color:var(--pleth)">SpO₂ <small>%</small></div><div class="big" style="color:var(--pleth)">--</div></div>
+      <div class="p wide" id="pABP"><div class="lab" style="color:var(--art)">ABP 동맥압 <small>mmHg</small></div><div class="big" style="color:var(--art)">--</div></div>
+      <div class="p" id="pCO2"><div class="lab" style="color:var(--co2)">EtCO₂ <small>mmHg</small></div><div class="big" style="color:var(--co2)">--</div><div class="row">호흡수 <b id="vRR">--</b></div></div>
+      <div class="p" id="pBT"><div class="lab" style="color:var(--bt)">체온 <small>℃</small></div><div class="big" style="color:var(--bt)">--</div></div>
+    </div>
+  </div>
+  <div class="lower">
+    <div class="module">
+      <h3>BIS 뇌파 모듈 <span>원래 뇌파와 주파수 성분 3개 (최근 5초)</span></h3>
+      <div class="bisgrid">
+        <div id="eegStrips"></div>
+        <div class="bisnum">
+          <div class="main" id="vBIS">--<small>BIS</small></div>
+          <div class="kv">SQI <b id="vSQI">--</b></div><div class="kv">EMG <b id="vEMG">--</b></div>
+          <div class="kv">SR <b id="vSR">--</b></div><div class="kv">SEF <b id="vSEF">--</b></div>
+          <div class="bars" id="bars"></div>
+        </div>
+      </div>
+    </div>
+    <div class="module">
+      <h3 style="color:var(--drug)">마취기 · 약물 <span>인공호흡기와 주입 농도</span></h3>
+      <div class="machine" id="machine"></div>
+    </div>
+  </div>
+</section>
+
+<section class="timeline" aria-label="시연 타임라인">
+  <div class="tl-head">
+    <h2>시연 타임라인</h2>
+    <p>띠의 색 칸은 재생기 값이 기준을 넘은 순간이고, 점은 검증된 사건입니다. 점이나 아래 목록을 누르면 그 10초 전으로 이동합니다.</p>
+  </div>
+  <div class="tl-body">
+    <div class="marks" id="marks"></div>
+    <canvas class="heat" id="heat" aria-hidden="true"></canvas>
+    <input type="range" id="seek" min="0" max="960" step="1" value="0" aria-label="재생 위치">
+  </div>
+  <ul class="evlist" id="evlist"></ul>
+</section>
+
+<div class="foot">
+  <p>방 테두리나 모니터 칸이 주황색이면 그 순간 원시 기준을 넘은 값이 있다는 뜻입니다(MAP 65 미만, BIS 40~60 밖, SpO₂ 90 미만, SQI 50 미만, 동맥압 20 미만 또는 200 초과). 지속 시간을 따지지 않아 가짜 경보도 그대로 뜹니다. 이를 걸러내고 순위를 매기는 것은 다음 단계인 감시 에이전트의 일입니다.</p>
+  <p>뇌파 주파수 성분(델타 1~4Hz, 알파 8~12Hz, 베타 13~30Hz)은 VitalDB 뇌파 원파형(EEG1)에서 계산한 값입니다. 비율은 직전 4초 구간 기준이며, SQI가 낮을 때는 믿을 수 없습니다. 파형은 화면 표시용으로 솎아냈습니다. 데이터 출처: VitalDB, 서울대학교병원.</p>
+</div>
+</div>
+
+<script>
+const D = /*__DATA__*/null;
+const EVENTS = [
+  [152,'OR-3','혈압 순간 하락 2회','filter','걸러내야 할 가짜 경보'],
+  [180,'OR-1','동맥압 순간 튐','filter','걸러내야 할 가짜 경보'],
+  [326,'OR-3','저혈압 1분 지속','real','노랑, 1위'],
+  [410,'OR-3','MAP 55 미만','real','빨강'],
+  [420,'OR-2','BIS 0과 SQI 0','filter','센서 문제, 걸러내야 함'],
+  [586,'OR-4','BIS 이탈 1분 지속','real','노랑, 2위 (베타파 증가)'],
+  [739,'OR-3','혈압 회복 1분 유지','recover','OR-4가 1위로 교체'],
+];
+// [키, 이름, 단위, 색 변수, 고정 눈금(없으면 자동)]
+const MWAVES = [['ecg','ECG II','mV','--ecg',null],['art','ABP','mmHg','--art',[0,160]],['pleth','Pleth','','--pleth',null],['co2','CO₂','mmHg','--co2',[0,50]],['awp','기도압','cmH₂O','--awp',[0,30]]];
+const EWAVES = [['eeg1','원래 뇌파','µV','--eeg'],['band_delta','델타 1~4','µV','--delta'],['band_alpha','알파 8~12','µV','--alpha'],['band_beta','베타 13~30','µV','--beta']];
+
+function unpack(p){
+  const bin=atob(p.b64), n=bin.length/2, u8=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+  const q=new Int16Array(u8.buffer), out=new Float32Array(n);
+  for(let i=0;i<n;i++) out[i]=q[i]===-32768?NaN:(q[i]+32500)*p.scale+p.off;
+  return out;
+}
+const N={}, W={};
+for(const r of D.rooms){ N[r]={}; W[r]={};
+  for(const k in D.num[r]) N[r][k]=unpack(D.num[r][k]);
+  for(const k in D.wave[r]) W[r][k]=unpack(D.wave[r][k]); }
+const SEC=D.sec;
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const mmss=s=>`${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+const val=(r,k,i)=>{const a=N[r]&&N[r][k]; const v=a?a[i]:NaN; return typeof v==='number'?v:NaN;};
+const fmt=(v,d=0)=>(typeof v==='number'&&isFinite(v))?v.toFixed(d):'--';
+
+function rawFlags(r,i){
+  const m=val(r,'map',i), b=val(r,'bis',i), s=val(r,'spo2',i), q=val(r,'sqi',i), f=[];
+  if(m>200||m<20) f.push('동맥압 잡음 범위'); else if(m<65) f.push('MAP<65');
+  if(b<40||b>60) f.push(b<40?'BIS<40':'BIS>60');
+  if(s<90) f.push('SpO₂<90');
+  if(q<50) f.push('SQI<50');
+  return f;
+}
+
+let t=0, playing=false, speed=1, sel='OR-3', last=performance.now();
+
+// ---- 중앙 감시 타일
+const roomsEl=document.getElementById('rooms'), tiles={};
+const TYPE={stable:'안정',hypotension:'저혈압',bis_excursion:'BIS 이탈',sensor_noise:'센서 잡음'};
+for(const r of D.rooms){
+  const m=D.meta[r], b=document.createElement('button');
+  b.className='room'; b.type='button'; b.setAttribute('aria-pressed', r===sel);
+  b.innerHTML=`<div class="rhead"><span class="rname">${r}</span><span class="rcase">case ${m.caseid}, ${TYPE[m.type]||m.type}</span></div>
+  <div class="vals"><div class="v"><span>MAP</span><b style="color:var(--art)">--</b></div><div class="v"><span>BIS</span><b style="color:#8b6fe0">--</b></div>
+  <div class="v"><span>SpO₂</span><b style="color:var(--accent)">--</b></div><div class="v"><span>HR</span><b style="color:#16a34a">--</b></div></div>
+  <div class="chips"></div>`;
+  b.onclick=()=>{sel=r; for(const k in tiles) tiles[k].el.setAttribute('aria-pressed',k===r); draw(true);};
+  roomsEl.appendChild(b);
+  const bs=b.querySelectorAll('.v b');
+  tiles[r]={el:b, v:{map:bs[0],bis:bs[1],spo2:bs[2],hr:bs[3]}, chips:b.querySelector('.chips')};
+}
+
+// ---- 파형 줄
+function makeStrips(el, list, h){
+  const o={};
+  for(const [k,name,unit,col] of list){
+    const d=document.createElement('div'); d.className='strip';
+    d.innerHTML=`<label style="color:var(${col})"><b>${name}</b><small>${unit}</small></label><canvas style="height:${h}px"></canvas>`;
+    el.appendChild(d); o[k]=d.querySelector('canvas');
+  }
+  return o;
+}
+const mStrips=makeStrips(document.getElementById('waves'), MWAVES, 64);
+const eStrips=makeStrips(document.getElementById('eegStrips'), EWAVES, 46);
+
+function fit(c){ const r=c.getBoundingClientRect(), dpr=Math.min(devicePixelRatio||1,2);
+  const w=Math.max(1,Math.round(r.width*dpr)), h=Math.max(1,Math.round(r.height*dpr));
+  if(c.width!==w||c.height!==h){c.width=w;c.height=h;} const x=c.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); return [x,r.width,r.height]; }
+
+// 실제 모니터처럼 왼쪽→오른쪽으로 쓸고 지나가며 덮어쓰는 방식(스윕)
+function drawSweep(c, arr, fs, col, fixed, digits){
+  const [x,w,h]=fit(c); x.clearRect(0,0,w,h);
+  const win=5, n=win*fs, pw=w-38;
+  const cyc=Math.floor(t/win)*win, ph=t-cyc, gap=0.12;
+  let lo=Infinity, hi=-Infinity;
+  const at=pos=>{ let tt = pos<=ph ? cyc+pos : cyc-win+pos; if(pos>ph && pos<ph+gap) return NaN; const j=Math.floor(tt*fs); return (j>=0&&j<arr.length)?arr[j]:NaN; };
+  const ys=new Float32Array(n);
+  for(let i=0;i<n;i++){ const v=at(i/fs); ys[i]=v; if(v===v){ if(v<lo)lo=v; if(v>hi)hi=v; } }
+  if(fixed){ lo=fixed[0]; hi=fixed[1]; }
+  if(!(hi>lo)){ x.fillStyle=css('--monmuted'); x.font='12px '+css('--txt'); x.fillText('신호 없음',8,h/2+4); return; }
+  if(!fixed){ const p=(hi-lo)*.1; lo-=p; hi+=p; }
+  x.strokeStyle=css(col); x.lineWidth=1.4; x.lineJoin='round'; x.beginPath(); let pen=false;
+  for(let i=0;i<n;i++){ const v=ys[i]; const px=i/(n-1)*pw, py=h-2-(Math.min(Math.max(v,lo),hi)-lo)/(hi-lo)*(h-4);
+    if(v===v){ pen?x.lineTo(px,py):x.moveTo(px,py); pen=true; } else pen=false; }
+  x.stroke();
+  x.fillStyle=css('--monmuted'); x.font='10.5px '+css('--txt'); x.textAlign='right';
+  x.fillText(fmt(hi,digits), w-2, 10); x.fillText(fmt(lo,digits), w-2, h-3); x.textAlign='left';
+}
+
+// ---- 수치 칸
+const machineEl=document.getElementById('machine');
+const MACH=[['FiO₂','fio2','%',0],['1회 호흡량','tv','mL',0],['분당 환기량','mv','L/분',1],['PEEP','peep','cmH₂O',0],['최고 기도압','pip','cmH₂O',0],['MAC','mac','',1],
+  null,['프로포폴 농도','ppf_ce','µg/mL',1],['레미펜타닐 농도','rftn_ce','ng/mL',1],['세보플루란','sevo_exp','%',1]];
+const machV={};
+for(const m of MACH){
+  if(!m){ machineEl.appendChild(document.createElement('hr')); continue; }
+  const d=document.createElement('div'); d.className='kv'; d.innerHTML=`<span>${m[0]} <small>${m[2]}</small></span><b>--</b>`;
+  machineEl.appendChild(d); machV[m[1]]={el:d.querySelector('b'),dg:m[3],row:d};
+}
+const barsEl=document.getElementById('bars'), barV={};
+for(const [k,nm,col] of [['delta','델타','--delta'],['alpha','알파','--alpha'],['beta','베타','--beta']]){
+  const d=document.createElement('div'); d.className='bar';
+  d.innerHTML=`<span style="color:var(${col})">${nm}</span><i><u style="background:var(${col});width:0%"></u></i><b>--</b>`;
+  barsEl.appendChild(d); barV[k]={u:d.querySelector('u'),b:d.querySelector('b')};
+}
+
+// ---- 타임라인
+const marksEl=document.getElementById('marks'), evEl=document.getElementById('evlist');
+EVENTS.forEach(([s,r,d,k,note],idx)=>{
+  const b=document.createElement('button'); b.className='mark '+k; b.type='button';
+  b.style.left=(s/SEC*100)+'%'; b.dataset.row=idx%2; b.setAttribute('aria-label',`${mmss(s)} ${r} ${d}`);
+  b.innerHTML=`<span class="lab">${r.replace('OR-','')}</span><span class="dot"></span>`;
+  b.onclick=()=>jump(s,r); marksEl.appendChild(b);
+  const li=document.createElement('li'); li.className=k;
+  li.innerHTML=`<button type="button"><span class="t">${mmss(s)}</span><span class="r">${r}</span><span class="d">${d}<span class="k">${note}</span></span></button>`;
+  li.querySelector('button').onclick=()=>jump(s,r); evEl.appendChild(li);
+});
+function jump(s,r){ sel=r; for(const k in tiles) tiles[k].el.setAttribute('aria-pressed',k===r); seekTo(s-10); }
+function drawHeat(){
+  const [x,w,h]=fit(document.getElementById('heat')); x.clearRect(0,0,w,h);
+  const rows=D.rooms.length, rh=h/rows;
+  D.rooms.forEach((r,ri)=>{
+    x.fillStyle=css('--muted'); x.font='10px '+css('--num'); x.fillText(r.replace('OR-',''),3,ri*rh+rh/2+3.5);
+    x.fillStyle=css('--warn');
+    for(let i=0;i<SEC;i++){ if(rawFlags(r,i).length){ x.fillRect(14+i/SEC*(w-14),ri*rh+2,Math.max(1,(w-14)/SEC),rh-4);} }
+  });
+  x.fillStyle=css('--ink'); x.fillRect(14+t/SEC*(w-14)-1,0,2,h);
+}
+const seek=document.getElementById('seek'); seek.max=SEC; seek.oninput=()=>seekTo(+seek.value);
+function seekTo(s){ t=Math.max(0,Math.min(SEC,s)); draw(true); }
+
+// ---- 컨트롤
+const playBtn=document.getElementById('play');
+playBtn.onclick=()=>{ if(t>=SEC) t=0; playing=!playing; playBtn.textContent=playing?'일시정지':'재생'; last=performance.now(); };
+const spEl=document.getElementById('speed');
+for(const s of [1,2,5,10,30]){ const b=document.createElement('button'); b.type='button'; b.textContent=s+'×';
+  b.setAttribute('aria-pressed',s===speed); b.onclick=()=>{speed=s; [...spEl.children].forEach(c=>c.setAttribute('aria-pressed',c===b));}; spEl.appendChild(b); }
+document.getElementById('theme').onclick=()=>{
+  const cur=document.documentElement.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  document.documentElement.dataset.theme=cur==='dark'?'light':'dark'; draw(true); };
+addEventListener('keydown',e=>{ if(e.target.tagName==='INPUT') return;
+  if(e.code==='Space'){e.preventDefault(); playBtn.click();} if(e.code==='ArrowRight') seekTo(t+10); if(e.code==='ArrowLeft') seekTo(t-10); });
+
+// ---- 그리기
+const $=id=>document.getElementById(id);
+let lastSec=-1;
+function setBig(id,html,alarm){ const p=$(id); p.querySelector('.big').innerHTML=html; p.classList.toggle('alarm',!!alarm); }
+function draw(force){
+  if(!isFinite(t)) t=0;
+  const i=Math.max(0,Math.min(SEC-1,Math.floor(t)));
+  $('clock').innerHTML=`${mmss(t)}<small> / ${mmss(SEC)}</small>`;
+  if(i!==lastSec||force){
+    lastSec=i; seek.value=Math.floor(t);
+    for(const r of D.rooms){
+      const T=tiles[r];
+      for(const k of ['map','bis','spo2','hr']) T.v[k].textContent=fmt(val(r,k,i));
+      const f=rawFlags(r,i); T.el.classList.toggle('raw',f.length>0);
+      T.chips.innerHTML=f.map(s=>`<span class="chip">${s}</span>`).join('');
+    }
+    const r=sel, m=D.meta[r], g=k=>val(r,k,i);
+    $('monTitle').textContent=`수술방 모니터 · ${r}`;
+    $('mRoom').textContent=`${r}  case ${m.caseid}`;
+    $('mInfo').textContent=`${m.optype||''}${m.age?`, ${m.age}세`:''}${m.sex?` ${m.sex==='M'?'남':'여'}`:''}  ·  재생 ${mmss(t)}`;
+    setBig('pHR', fmt(g('hr')));
+    setBig('pSpO2', fmt(g('spo2')), g('spo2')<90);
+    setBig('pABP', `${fmt(g('sbp'))}/${fmt(g('dbp'))} <small>(${fmt(g('map'))})</small>`, g('map')<65||g('map')>200||g('map')<20);
+    setBig('pCO2', fmt(g('etco2'))); $('vRR').textContent=fmt(g('rr'));
+    setBig('pBT', fmt(g('bt'),1));
+    $('vBIS').innerHTML=`${fmt(g('bis'))}<small>BIS</small>`;
+    $('vBIS').parentElement.parentElement.parentElement.classList.toggle('alarm', g('bis')<40||g('bis')>60);
+    $('vSQI').textContent=fmt(g('sqi')); $('vSQI').style.color = g('sqi')<50 ? '#f5a524' : '';
+    $('vEMG').textContent=fmt(g('emg')); $('vSR').textContent=fmt(g('sr')); $('vSEF').textContent=fmt(g('sef'),1);
+    for(const k in barV){ const v=g('ratio_'+k); barV[k].u.style.width=(v===v?Math.min(100,v):0)+'%'; barV[k].b.textContent=fmt(v); }
+    for(const k in machV){ const v=g(k); machV[k].el.textContent=fmt(v,machV[k].dg); machV[k].row.style.opacity = v===v&&!(k==='mac'&&v===0) ? 1 : .45; }
+    drawHeat();
+  }
+  for(const [k,,,col,fixed] of MWAVES) drawSweep(mStrips[k], W[sel][k], D.wave_fs[k], col, fixed, k==='ecg'?2:0);
+  for(const [k,,,col] of EWAVES) drawSweep(eStrips[k], W[sel][k], D.wave_fs[k], col, null, 0);
+}
+function loop(now){ let dt=(now-last)/1000; last=now; if(!isFinite(dt)||dt<0) dt=0; if(dt>1) dt=1;
+  if(playing){ t+=dt*speed; if(t>=SEC){t=SEC; playing=false; playBtn.textContent='처음부터';} }
+  draw(false); requestAnimationFrame(loop); }
+addEventListener('resize',()=>draw(true));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>draw(true));
+seekTo(0); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
