@@ -229,3 +229,16 @@ AI-Addict/
 
 - VitalDB — 서울대학교병원 공개 수술 중 생체신호 데이터셋 (https://vitaldb.net)
 - 데이터 이용 시 VitalDB 이용 약관을 따릅니다.
+
+---
+
+## 실제 케이스로 대시보드 돌리기 (재생기 ↔ 에이전트 연동)
+
+1. 케이스 받기 (CT 트랙 포함, 이미 받았어도 다시): `python data/scripts/6_download_cases.py`
+2. 연동 확인 (가짜 데이터, 인터넷 불필요): `python test_real_replayer.py`
+3. 서버 실행: `uvicorn main:app` → http://localhost:8000
+
+- `config.USE_REAL_CASES = True`: `data/real_replayer.py`가 `replay/replayer.py`로 `cases/`를 읽어 에이전트에 전달
+- `False`: 기존 가상 시나리오(`data/replayer.py`), `cases/` 없는 PC 비상용
+- `REPLAY_FROM_DEMO_START`: True면 csv의 `demo_start_s`부터, False면 수술 처음부터 전체 재생
+- 대시보드 '시연 구간 바로가기' 버튼은 `selected_cases.csv`의 이상 시점 10초 전으로 자동 생성

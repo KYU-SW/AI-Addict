@@ -31,7 +31,12 @@ from agents.supervisor import SupervisorAgent
 from core.enums import EventType
 from core.event_bus import EventBus
 from core.models import Event, VitalSigns
-from data.replayer import VitalDBReplayer
+if getattr(config, "USE_REAL_CASES", False):
+    # 실제 VitalDB 케이스 (1번 주자 재생기 + 어댑터)
+    from data.real_replayer import RealCaseReplayer as VitalDBReplayer
+else:
+    # 가상 시나리오 데이터 (cases/ 폴더 없을 때 대비용)
+    from data.replayer import VitalDBReplayer
 
 # ── 로깅 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -801,6 +806,13 @@ if not STATIC_DIR.exists():
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/api/jump_points")
+async def get_jump_points() -> JSONResponse:
+    """시연 구간 바로가기 목록. 실제 케이스 재생기면 selected_cases.csv의 이상 시점, 가상 데이터면 빈 목록(HTML 기본 버튼 유지)."""
+    points = getattr(replayer, "jump_points", None) or []
+    return JSONResponse(content={"success": True, "jump_points": points})
 
 
 @app.get("/", response_class=HTMLResponse)

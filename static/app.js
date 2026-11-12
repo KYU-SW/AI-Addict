@@ -81,6 +81,7 @@
         map: [],
         hr: [],
         spo2: [],
+        eeg: { delta: [], alpha: [], beta: [] },
       },
       // 활성 경보 목록 (Map: alertId -> alertObject)
       activeAlerts: new Map(),
@@ -94,6 +95,7 @@
         map: null,
         hr: null,
         spo2: null,
+        eeg: null,
       },
     };
   }
@@ -222,6 +224,35 @@
   /**
    * 각 수술실 타일의 미니 스파크라인 차트 3종(MAP, HR, SpO2) 초기화
    */
+  // 뇌파 대역 [키, 선 색상]
+  const EEG_BANDS = [['delta', '#a29bfe'], ['alpha', '#55efc4'], ['beta', '#fd79a8']];
+
+  /**
+   * 뇌파 δ/α/β 성분(%) 패널 갱신. 값이 0~1 비율로 와도 %로 맞춰 표시.
+   */
+  function updateEegPanel(roomId, vitals) {
+    const room = state.rooms[roomId];
+    if (!room) return;
+    const toPct = (v) => (v == null || isNaN(v) ? null : (v > 0 && v <= 1 ? v * 100 : Number(v)));
+    EEG_BANDS.forEach(([band]) => {
+      const v = toPct(vitals[`eeg_${band}`]);
+      const hist = room.history.eeg[band];
+      hist.push(v);
+      if (hist.length > 120) hist.shift();
+      const el = document.getElementById(`eeg-val-${roomId}-${band}`);
+      if (el) el.textContent = v == null ? '--' : Math.round(v);
+    });
+    const chart = room.charts.eeg;
+    if (chart) {
+      chart.data.labels = Array(60).fill('');
+      EEG_BANDS.forEach(([band], i) => {
+        const h = room.history.eeg[band].slice(-60);
+        chart.data.datasets[i].data = Array(60 - h.length).fill(null).concat(h);
+      });
+      chart.update('none');
+    }
+  }
+
   function initSparklineCharts() {
     // 오프라인 시연 등으로 Chart.js CDN 로드 실패 시에도 대시보드 전체가 멈추지 않도록 보호
     if (typeof Chart === 'undefined') {
@@ -279,6 +310,19 @@
       const ctxSpo2 = document.getElementById(`chart-${r}-spo2`)?.getContext('2d');
       if (ctxSpo2) {
         room.charts.spo2 = new Chart(ctxSpo2, configTemplate('#48dbfb', 75, 100));
+      }
+
+      // 뇌파 δ/α/β 차트 (선 3개, 0~100%)
+      const ctxEeg = document.getElementById(`chart-${r}-eeg`)?.getContext('2d');
+      if (ctxEeg) {
+        const cfg = configTemplate('#a29bfe', 0, 100);
+        cfg.data.datasets = EEG_BANDS.map(([, color]) => ({
+          data: Array(60).fill(null), borderColor: color, borderWidth: 1.6,
+          pointRadius: 0, fill: false, tension: 0.35,
+        }));
+        cfg.options.scales.y.min = 0;
+        cfg.options.scales.y.max = 100;
+        room.charts.eeg = new Chart(ctxEeg, cfg);
       }
     }
   }
@@ -436,6 +480,7 @@
     if (vitals.map != null) updateSparkline(roomId, 'map', vitals.map);
     if (vitals.hr != null) updateSparkline(roomId, 'hr', vitals.hr);
     if (vitals.spo2 != null) updateSparkline(roomId, 'spo2', vitals.spo2);
+    updateEegPanel(roomId, vitals);
 
     // 5. 방 타일 레벨 스타일 갱신
     updateRoomTileBadgeAndBorder(roomId);
@@ -971,6 +1016,15 @@
       room.history.map = [];
       room.history.hr = [];
       room.history.spo2 = [];
+      room.history.eeg = { delta: [], alpha: [], beta: [] };
+      if (room.charts.eeg) {
+        room.charts.eeg.data.datasets.forEach((ds) => { ds.data = Array(60).fill(null); });
+        room.charts.eeg.update('none');
+      }
+      EEG_BANDS.forEach(([band]) => {
+        const el = document.getElementById(`eeg-val-${r}-${band}`);
+        if (el) el.textContent = '--';
+      });
 
       if (isFullReset) {
         room.drugTargets.propofol_ce = 3.0;
@@ -1477,14 +1531,18 @@
     if (DOM.btnResetSim) {
       DOM.btnResetSim.addEventListener('click', resetSimulation);
     }
-    DOM.jumpButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
+    // 바로가기 버튼: 부모에 위임 → 서버에서 받아 다시 그린 버튼도 동작
+    const jumpBar = document.getElementById('scenario-jump-bar');
+    if (jumpBar) {
+      jumpBar.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-jump');
+        if (!btn) return;
         const targetTick = Number(btn.dataset.tick);
         if (!isNaN(targetTick)) {
           seekSimulation(targetTick);
         }
       });
-    });
+    }
     if (DOM.timeProgressBar) {
       DOM.timeProgressBar.addEventListener('click', (e) => {
         const rect = DOM.timeProgressBar.getBoundingClientRect();
@@ -1563,6 +1621,33 @@
   }
 
   // ── 14. 애플리케이션 부트스트랩 ───────────────────────────────────────────
+  /**
+   * 실제 케이스 재생 시 바로가기 버튼을 서버의 이상 시점 목록으로 교체.
+   * 목록이 비어 있으면(가상 데이터 모드) HTML 기본 버튼을 그대로 둠.
+   */
+  async function loadJumpPoints() {
+    const bar = document.getElementById('scenario-jump-bar');
+    if (!bar) return;
+    try {
+      const res = await fetch('/api/jump_points');
+      const data = await res.json();
+      const points = (data && data.jump_points) || [];
+      if (!points.length) return;
+      bar.innerHTML = '';
+      points.forEach((p) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-jump';
+        btn.dataset.tick = String(p.tick);
+        btn.title = `${formatTime(p.tick)} — ${p.note || ''}`;
+        btn.textContent = `${p.label} (${formatTime(p.tick)})`;
+        bar.appendChild(btn);
+      });
+    } catch (err) {
+      console.warn('[AI-Addict] 바로가기 목록 로드 실패, 기본 버튼 유지', err);
+    }
+  }
+
   function initApp() {
     console.log('[AI-Addict] Dashboard App initializing...');
     initSparklineCharts();
@@ -1572,6 +1657,7 @@
     // 초기 시스템 시간 표시
     DOM.systemTime.textContent = '00:00';
     DOM.maxTime.textContent = '/ 16:00';
+    loadJumpPoints();
 
     console.log('[AI-Addict] Dashboard App initialized successfully.');
   }
