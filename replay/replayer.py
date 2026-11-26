@@ -22,7 +22,8 @@
 import json, time
 from dataclasses import dataclass, field
 from pathlib import Path
-import numpy as np, pandas as pd
+import numpy as np
+# pandas는 parquet(cases/)을 읽을 때만 필요. 배포 서버는 demo/*.npz만 읽으므로 pandas 없이 동작
 
 HOLD_S = 10          # 이 시간(초)보다 오래된 값은 None 처리
 FS = {'num': 1, 'eeg': 128, 'wave': 500, 'vent': 100}
@@ -52,26 +53,56 @@ class Frame:
 class CaseReplayer:
     """케이스 하나를 1초 단위로 재생."""
 
-    def __init__(self, caseid, start=0, room=None, data_dir='cases', duration=None):
-        """duration(초)을 주면 start부터 그만큼만 메모리에 올림 (노트북 메모리 절약용)."""
-        d = Path(data_dir)
+    def __init__(self, caseid, start=0, room=None, data_dir='cases', duration=None, clip_dir=None):
+        """duration(초)을 주면 start부터 그만큼만 메모리에 올림 (노트북 메모리 절약용).
+        clip_dir에 demo/case_<id>_demo.npz(7_make_demo_clips.py 결과)가 있고 start가 그 구간 시작과 같으면
+        parquet 대신 그 작은 파일을 읽음 → 메모리 수십 MB, pandas 불필요 (Render 512MB 서버용)."""
         self.caseid, self.room = int(caseid), room or f'case{caseid}'
-        self.meta = json.loads((d / f'case_{caseid}_meta.json').read_text(encoding='utf-8'))
         self.offset = int(start)
-        stop = None if duration is None else self.offset + int(duration)
+        clip = Path(clip_dir) / f'case_{caseid}_demo.npz' if clip_dir else None
+        if clip is not None and clip.exists() and self._load_clip(clip, duration):
+            self.source = 'clip'
+        else:
+            self._load_parquet(Path(data_dir), duration)
+            self.source = 'parquet'
+        self.pos = 0
 
-        num = pd.read_parquet(d / f'case_{caseid}_num.parquet')
+    def _load_clip(self, path, duration):
+        z = np.load(path)
+        meta = json.loads(str(z['meta']))
+        if int(meta['clip_start_s']) != self.offset:
+            return False   # 다른 시작점을 요청함 → 전체 데이터(parquet)로
+        pre = int(meta['clip_pre_s'])
+        n = int(meta['clip_duration_s']) if duration is None else min(int(duration), int(meta['clip_duration_s']))
+        self.meta = meta
+        self.num_cols = list(meta['num_cols'])
+        # 앞쪽 여유(pre초)까지 포함해 '마지막 값 유지'를 계산한 뒤 잘라냄 → 0초부터 값이 채워짐
+        held, age = self._hold(z['num'])
+        self.num_hold, self.num_age = held[pre:pre + n], age[pre:pre + n]
+        self.eeg, self.wave, self.vent = {}, {}, {}
+        for k in z.files:
+            kind, _, col = k.partition('__')
+            if kind in ('eeg', 'wave', 'vent'):
+                fs = FS[kind]
+                getattr(self, kind)[col] = np.ascontiguousarray(z[k][pre * fs:(pre + n) * fs])
+        self.length = len(self.num_hold)
+        return True
+
+    def _load_parquet(self, d, duration):
+        import pandas as pd
+        self.meta = json.loads((d / f'case_{self.caseid}_meta.json').read_text(encoding='utf-8'))
+        stop = None if duration is None else self.offset + int(duration)
+        num = pd.read_parquet(d / f'case_{self.caseid}_num.parquet')
         self.num_cols = [c for c in num.columns if c != 't']
         num = num.iloc[self.offset:stop]
         vals = num[self.num_cols].to_numpy(np.float32)
         self.num_hold, self.num_age = self._hold(vals)
 
-        self.eeg = self._load_wave(d / f'case_{caseid}_eeg.parquet', FS['eeg'], stop)
-        self.wave = self._load_wave(d / f'case_{caseid}_wave.parquet', FS['wave'], stop)
-        vp = d / f'case_{caseid}_vent.parquet'   # 없는 옛 데이터도 동작하도록 선택 사항
+        self.eeg = self._load_wave(d / f'case_{self.caseid}_eeg.parquet', FS['eeg'], stop)
+        self.wave = self._load_wave(d / f'case_{self.caseid}_wave.parquet', FS['wave'], stop)
+        vp = d / f'case_{self.caseid}_vent.parquet'   # 없는 옛 데이터도 동작하도록 선택 사항
         self.vent = self._load_wave(vp, FS['vent'], stop) if vp.exists() else {}
         self.length = len(vals)
-        self.pos = 0
 
     @staticmethod
     def _hold(vals):
@@ -91,10 +122,13 @@ class CaseReplayer:
         return held, age
 
     def _load_wave(self, path, fs, stop):
+        import pandas as pd
         df = pd.read_parquet(path)
         cols = [c for c in df.columns if c != 't']
         a = df[cols].to_numpy(np.float32)[self.offset * fs: None if stop is None else stop * fs]
-        return {c: a[:, j] for j, c in enumerate(cols)}
+        del df
+        # 복사해서 저장: 슬라이스(view)로 두면 수술 전체 배열이 메모리에 계속 남음 (방마다 100MB+)
+        return {c: np.ascontiguousarray(a[:, j]) for j, c in enumerate(cols)}
 
     def tick(self):
         i = self.pos
@@ -128,6 +162,7 @@ class Replayer:
                  duration=None, starts=None):
         """selected_cases.csv에서 방 배정과 demo_start_s를 읽어 생성.
         starts={'OR-3': 13000}처럼 주면 해당 방만 시작 지점 변경."""
+        import pandas as pd
         sel = pd.read_csv(csv_path)
         sel = sel[sel.room.isin(rooms)].set_index('room').loc[list(rooms)]
         starts = starts or {}

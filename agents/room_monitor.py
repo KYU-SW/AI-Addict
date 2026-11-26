@@ -69,6 +69,7 @@ class RoomMonitorAgent(BaseAgent):
         self.suppressed_transients: int = 0
         self._noise_episode: set = set()          # 잡음으로 기각 중인 파라미터
         self._recovering_from_red: set = set()    # RED→YELLOW 호전 중인 파라미터 (일시 이탈 집계 제외)
+        self._high_map_since: Optional[float] = None  # MAP 상승(>110) 시작 시각. 동맥관 플러싱(20~50초) 오경보 방지용
 
     async def process(self, vitals: VitalSigns) -> None:
         """매 틱마다 생체신호를 전달받아 분석 및 이벤트를 발행합니다.
@@ -378,6 +379,19 @@ class RoomMonitorAgent(BaseAgent):
         - YELLOW: 60초 이상 연속 지속 시에만 ALERT 발행
         - RED: 즉시 ALERT 발행
         """
+        # 0. MAP '상승' 쪽 빨강은 즉시 발령하지 않음 (D-09에는 저혈압 55 미만만 즉시 빨강).
+        #    실제 VitalDB 시연 데이터(OR-1, OR-3)에서 동맥관 플러싱으로 MAP 140~237이 20~50초 이어져
+        #    즉시 빨강이면 가짜 RED가 나고 1위가 계속 뒤바뀜 → 상승이 MAP_HIGH_RED_DELAY_SEC 이상 지속될 때만 빨강
+        if param_name == "map":
+            if val > config.MAP_WARNING_HIGH:
+                if self._high_map_since is None:
+                    self._high_map_since = timestamp
+                if (condition_level == AlertLevel.RED
+                        and timestamp - self._high_map_since < getattr(config, "MAP_HIGH_RED_DELAY_SEC", 60)):
+                    condition_level = AlertLevel.YELLOW
+            else:
+                self._high_map_since = None
+
         # 1. 정상이 된 경우
         if condition_level == AlertLevel.GREEN:
             yellow_started = self._yellow_start_times.pop(param_name, None)
@@ -435,24 +449,26 @@ class RoomMonitorAgent(BaseAgent):
 
         # 3. 주의(YELLOW) 상태인 경우 (1분 지속성 규칙 적용)
         if condition_level == AlertLevel.YELLOW:
-            # 이전에 RED 경보였다면 RED는 해제 처리하고 YELLOW 지속성 검사 시작
+            # 이전에 RED 경보였다면, 경보를 끊지 않고 같은 지표의 YELLOW 경보로 바로 낮춤.
+            # (예전: RED 해제 후 YELLOW 60초를 처음부터 다시 셈 → 환자는 여전히 이상 범위인데
+            #  그 1분 동안 경보가 사라져 우선순위가 급락하는 문제. 실제 OR-3 MAP 54↔55 구간에서 확인)
             if param_name in self.active_alerts and self.active_alerts[param_name].level == AlertLevel.RED:
-                cleared_alert = self.active_alerts.pop(param_name)
-                await self.emit(
-                    EventType.ALERT_CLEARED,
-                    {
-                        "id": cleared_alert.id,
-                        "alert_id": cleared_alert.id,
-                        "room_id": self.room_id,
-                        "parameter": param_name,
-                        "message": f"{param_name.upper()} RED 상태 해제 (YELLOW로 호전)",
-                        "value": val,
-                        "timestamp": timestamp,
-                    },
-                    timestamp,
+                prev_red = self.active_alerts[param_name]
+                alert = Alert(
+                    room_id=self.room_id,
+                    level=AlertLevel.YELLOW,
+                    parameter=param_name,
+                    value=val,
+                    threshold=threshold,
+                    message=f"{msg} (위험 단계에서 호전, 주의 범위 지속)",
+                    timestamp=timestamp,
                 )
-                self._yellow_start_times[param_name] = timestamp
-                self._recovering_from_red.add(param_name)
+                self.active_alerts[param_name] = alert
+                self._yellow_start_times.pop(param_name, None)
+                self.logger.info("[Room %d] RED → YELLOW 하향: %s (RED 발생 시각 %.0f)",
+                                 self.room_id, param_name, prev_red.timestamp)
+                # 같은 지표 경보는 Supervisor·대시보드에서 '교체'되므로 ALERT_CLEARED 없이 ALERT만 발행
+                await self.emit(EventType.ALERT, alert.model_dump(), timestamp)
                 return
 
             # 이미 발령된 YELLOW 경보가 있는 경우 값만 갱신
@@ -501,6 +517,7 @@ class RoomMonitorAgent(BaseAgent):
         self._beta_baseline_samples.clear()
         self._noise_episode.clear()
         self._recovering_from_red.clear()
+        self._high_map_since = None
         self.suppressed_artifacts = 0
         self.suppressed_transients = 0
         self.current_alert_level = AlertLevel.GREEN

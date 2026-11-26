@@ -33,7 +33,12 @@ from agents.supervisor import SupervisorAgent
 from core.enums import EventType
 from core.event_bus import EventBus
 from core.models import Event, VitalSigns
-from data.replayer import VitalDBReplayer
+if getattr(config, "USE_REAL_CASES", False):
+    # 실제 VitalDB 케이스 (1번 주자 재생기 + 어댑터)
+    from data.real_replayer import RealCaseReplayer as VitalDBReplayer
+else:
+    # 가상 시나리오 데이터 (cases/ 폴더 없을 때 대비용)
+    from data.replayer import VitalDBReplayer
 
 # ── 로깅 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -265,7 +270,17 @@ async def lifespan(app: FastAPI):
         except TypeError:
             replayer = VitalDBReplayer()
 
-    await replayer.load()
+    try:
+        await replayer.load()
+    except Exception as exc:
+        # demo/·cases/ 둘 다 없으면 서버가 안 뜨는 대신 가상 시나리오로 대체 (비상용)
+        if not getattr(config, "USE_REAL_CASES", False):
+            raise
+        logger.warning("실제 케이스 로드 실패 (%s) → 가상 시나리오 데이터로 대체합니다.", exc)
+        from data.replayer import VitalDBReplayer as SimulatedReplayer
+        replayer = SimulatedReplayer(case_ids=config.VITALDB_CASE_IDS)
+        await replayer.load()
+    logger.info("데이터 소스: %s", "실제 VitalDB 케이스" if hasattr(replayer, "rooms") else "가상 시나리오")
     logger.info("VitalDBReplayer 데이터 로드 완료 (총 %d 틱 / %d개 케이스)", replayer.max_ticks, len(config.VITALDB_CASE_IDS))
 
     # 2. 1~4번 수술실 에이전트 인스턴스 생성 및 시작
@@ -638,6 +653,8 @@ async def _clear_transient_agent_states(reset_drugs: bool = False) -> None:
         }
         if hasattr(supervisor, "_alert_start_times"):
             supervisor._alert_start_times.clear()
+        if hasattr(supervisor, "_param_start_times"):
+            supervisor._param_start_times.clear()
         if hasattr(supervisor, "_prev_severity"):
             supervisor._prev_severity = {rid: 0.0 for rid in supervisor.room_ids}
         if hasattr(supervisor, "_pending_suggestions"):
@@ -855,6 +872,13 @@ if not STATIC_DIR.exists():
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/api/jump_points")
+async def get_jump_points() -> JSONResponse:
+    """시연 구간 바로가기 목록. 실제 케이스 재생기면 selected_cases.csv의 이상 시점, 가상 데이터면 빈 목록(HTML 기본 버튼 유지)."""
+    points = getattr(replayer, "jump_points", None) or []
+    return JSONResponse(content={"success": True, "jump_points": points})
 
 
 @app.get("/", response_class=HTMLResponse)

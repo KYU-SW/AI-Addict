@@ -229,3 +229,24 @@ AI-Addict/
 
 - VitalDB — 서울대학교병원 공개 수술 중 생체신호 데이터셋 (https://vitaldb.net)
 - 데이터 이용 시 VitalDB 이용 약관을 따릅니다.
+
+---
+
+## 실제 케이스로 대시보드 돌리기 (재생기 ↔ 에이전트 연동)
+
+저장소에 **실제 VitalDB 시연 구간(`demo/`, 4개 방 합계 약 4MB)** 이 들어 있어서, 데이터를 따로 받지 않아도 바로 실제 데이터로 돕니다.
+
+```bash
+pip install -r requirements-server.txt   # 서버만 돌릴 때 (pandas 불필요)
+uvicorn main:app                          # → http://localhost:8000
+python test_demo_clips.py                 # 16분 시연 구간을 에이전트 전체에 통과시켜 경보 시각·1위 변화·메모리 확인
+```
+
+- `demo/case_<id>_demo.npz`: `selected_cases.csv`의 `demo_start_s`부터 16분(`config.DEMO_DURATION`) 구간만 잘라 둔 파일.
+  구간은 DECISIONS D-07 기준이라 잡음 걸러냄 → OR-3 저혈압(노랑→빨강) → OR-2 BIS 0 센서 문제 → OR-4 BIS 이탈이 모두 들어 있음
+- 수술 전체(약 130~195MB)는 저장소에 없음. 다시 만들거나 구간을 바꾸려면:
+  `python data/scripts/6_download_cases.py` → `python data/scripts/7_make_demo_clips.py`
+- 메모리: 시연 구간만 읽어 서버 전체 약 110MB (Render 무료 512MB에서 동작). 예전처럼 수술 전체 파형을 읽으면 512MB 초과
+- `config.USE_REAL_CASES = False` 또는 `demo/`·`cases/`가 모두 없으면: 가상 시나리오(`data/replayer.py`)로 자동 대체
+- `REPLAY_FROM_DEMO_START = False`: 수술 처음부터 전체 재생 (`cases/` 필요, 로컬 PC 전용)
+- 대시보드 '시연 구간 바로가기' 버튼은 `selected_cases.csv`의 이상 시점 10초 전으로 자동 생성

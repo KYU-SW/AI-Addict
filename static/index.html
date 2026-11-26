@@ -850,6 +850,18 @@
             <div class="eeg-band-item"><span class="eeg-band-label alpha">α 알파 (8~12Hz 안정파)</span><div class="eeg-bar-track"><div class="eeg-bar-fill alpha" id="detail-bar-alpha" style="width:0%"></div></div><span class="eeg-band-val" id="detail-val-alpha">--</span></div>
             <div class="eeg-band-item"><span class="eeg-band-label beta">β 베타 (13~30Hz 각성파)</span><div class="eeg-bar-track"><div class="eeg-bar-fill beta" id="detail-bar-beta" style="width:0%"></div></div><span class="eeg-band-val" id="detail-val-beta">--</span></div>
           </div>
+          <!-- 최근 60초 δ/α/β 추세 (타일 공간이 부족해 상세 화면에서만 표시) -->
+          <div class="detail-eeg-trend">
+            <div class="sparkline-label">
+              <span>최근 60초 추세</span>
+              <span class="eeg-legend">
+                <span class="eeg-chip eeg-delta">δ</span>
+                <span class="eeg-chip eeg-alpha">α</span>
+                <span class="eeg-chip eeg-beta">β</span>
+              </span>
+            </div>
+            <div class="detail-eeg-canvas-box"><canvas id="detail-chart-eeg"></canvas></div>
+          </div>
         </div>
         <div class="detail-alerts-section">
           <h4>현재 경보 및 센서 상태 판정 근거</h4>
