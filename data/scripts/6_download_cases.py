@@ -20,7 +20,8 @@ NUM = {  # 1Hz 수치 트랙 (파일 열 이름: VitalDB 트랙 이름)
     'bis': 'BIS/BIS', 'sqi': 'BIS/SQI', 'emg': 'BIS/EMG', 'sef': 'BIS/SEF',
     'map': 'Solar8000/ART_MBP', 'sbp': 'Solar8000/ART_SBP', 'dbp': 'Solar8000/ART_DBP',
     'hr': 'Solar8000/HR', 'spo2': 'Solar8000/PLETH_SPO2', 'etco2': 'Solar8000/ETCO2',
-    'ppf_ce': 'Orchestra/PPF20_CE', 'rftn_ce': 'Orchestra/RFTN20_CE',   # 확장(PK/PD)용, 없는 케이스는 빈 열
+    'ppf_ce': 'Orchestra/PPF20_CE', 'rftn_ce': 'Orchestra/RFTN20_CE',
+    'ppf_ct': 'Orchestra/PPF20_CT', 'rftn_ct': 'Orchestra/RFTN20_CT',   # 확장(PK/PD)용, CT=의사가 입력한 목표 농도
     'sevo_exp': 'Primus/EXP_SEVO',
     # 실제 수술방 모니터용 추가 항목 (2026-09-30)
     'sr': 'BIS/SR', 'bt': 'Solar8000/BT', 'rr': 'Primus/RR_CO2', 'fio2': 'Primus/FIO2',

@@ -69,6 +69,7 @@ class RoomMonitorAgent(BaseAgent):
         self.suppressed_transients: int = 0
         self._noise_episode: set = set()          # 잡음으로 기각 중인 파라미터
         self._recovering_from_red: set = set()    # RED→YELLOW 호전 중인 파라미터 (일시 이탈 집계 제외)
+        self._high_map_since: Optional[float] = None  # MAP 상승(>110) 시작 시각. 동맥관 플러싱(20~50초) 오경보 방지용
 
     async def process(self, vitals: VitalSigns) -> None:
         """매 틱마다 생체신호를 전달받아 분석 및 이벤트를 발행합니다.
@@ -378,6 +379,19 @@ class RoomMonitorAgent(BaseAgent):
         - YELLOW: 60초 이상 연속 지속 시에만 ALERT 발행
         - RED: 즉시 ALERT 발행
         """
+        # 0. MAP '상승' 쪽 빨강은 즉시 발령하지 않음 (D-09에는 저혈압 55 미만만 즉시 빨강).
+        #    실제 VitalDB 시연 데이터(OR-1, OR-3)에서 동맥관 플러싱으로 MAP 140~237이 20~50초 이어져
+        #    즉시 빨강이면 가짜 RED가 나고 1위가 계속 뒤바뀜 → 상승이 MAP_HIGH_RED_DELAY_SEC 이상 지속될 때만 빨강
+        if param_name == "map":
+            if val > config.MAP_WARNING_HIGH:
+                if self._high_map_since is None:
+                    self._high_map_since = timestamp
+                if (condition_level == AlertLevel.RED
+                        and timestamp - self._high_map_since < getattr(config, "MAP_HIGH_RED_DELAY_SEC", 60)):
+                    condition_level = AlertLevel.YELLOW
+            else:
+                self._high_map_since = None
+
         # 1. 정상이 된 경우
         if condition_level == AlertLevel.GREEN:
             yellow_started = self._yellow_start_times.pop(param_name, None)
@@ -501,6 +515,7 @@ class RoomMonitorAgent(BaseAgent):
         self._beta_baseline_samples.clear()
         self._noise_episode.clear()
         self._recovering_from_red.clear()
+        self._high_map_since = None
         self.suppressed_artifacts = 0
         self.suppressed_transients = 0
         self.current_alert_level = AlertLevel.GREEN

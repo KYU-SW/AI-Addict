@@ -874,6 +874,24 @@ button:focus-visible {
   height: 100% !important;
 }
 
+/* 뇌파 δ/α/β 성분 패널 */
+.eeg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+.eeg-legend { display: flex; gap: 8px; }
+.eeg-chip { font-family: var(--font-mono); }
+.eeg-chip b { font-weight: 600; color: var(--text-secondary); }
+.eeg-delta { color: #a29bfe; }
+.eeg-alpha { color: #55efc4; }
+.eeg-beta  { color: #fd79a8; }
+.eeg-canvas-box { height: 44px; }
+
 /* 수술실 하단 영역: TCI 목표 농도 & 활성 경보 */
 .room-bottom-grid {
   display: grid;
