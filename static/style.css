@@ -2020,6 +2020,58 @@ button:focus-visible {
   row-gap: 4px;
 }
 
+/* ── 13. 수술실 타일 잘림 방지 (EEG 3대역 바 추가로 늘어난 높이 보정) ──
+   1) 타일 내부 여백·스파크라인 높이를 줄여 1080p 한 화면에 전부 들어오게 압축
+   2) 그래도 화면이 작으면(디스플레이 배율 125%·150%, 노트북 등) 내용을 자르지 않고
+      중앙 그리드만 세로 스크롤되도록 행 높이를 '내용 이상'으로 보장 */
+.rooms-grid {
+  grid-template-rows: repeat(2, minmax(min-content, 1fr));
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.room-tile {
+  gap: 6px;
+  padding: 10px 12px;
+}
+.vital-card {
+  padding: 4px 8px;
+}
+.vital-header {
+  margin-bottom: 0;
+}
+.eeg-bands-strip {
+  margin-bottom: 0;
+  padding: 4px 10px;
+}
+.sparklines-section {
+  padding: 4px 8px;
+}
+.sparkline-canvas-box {
+  height: 26px;
+}
+.drug-targets-panel, .active-alerts-panel {
+  padding: 4px 8px;
+  gap: 3px;
+}
+.drug-badge {
+  padding: 2px 6px;
+}
+.alerts-container {
+  min-height: 24px;
+}
+
+/* 하단 이벤트 로그 높이를 조금 줄여 2x2 타일이 1080p에서 스크롤 없이 들어오게 함 */
+.event-log-section {
+  height: 155px;
+}
+
+/* 세로 공간이 좁은 화면에서는 하단 이벤트 로그를 낮춰 수술실 타일 공간 확보 */
+@media (max-height: 860px) {
+  .event-log-section {
+    height: 140px;
+  }
+}
+
 /* ── 14. 보기 전용 모드 (배포 서버에서 관리자 키 없이 접속한 방문자) ── */
 .view-only-pill {
   display: inline-flex;
@@ -2040,4 +2092,18 @@ body.view-only .speed-control-group,
 body.view-only #scenario-jump-bar,
 body.view-only .suggestion-actions {
   display: none !important;
+}
+
+/* ── 15. 실제 데이터 연동 후 레이아웃 보정 ── */
+/* 타일이 내용보다 작아지지 않게 해서, 공간이 부족하면 잘리지 않고 가운데 영역이 스크롤되도록 보장 */
+.room-tile {
+  min-height: min-content;
+}
+/* 상세 모달의 뇌파 60초 추세 차트 */
+.detail-eeg-trend {
+  margin-top: 10px;
+}
+.detail-eeg-canvas-box {
+  position: relative;
+  height: 90px;
 }

@@ -84,6 +84,16 @@ PRIORITY_BASE_YELLOW: float = 20.0       # YELLOW 기본 점수
 PRIORITY_W_SEVERITY: float = 3.0         # 하위 호환용 가중치
 PRIORITY_W_DURATION: float = 2.0         # 분(minute)당 지속시간 가중치
 PRIORITY_DURATION_MAX_BONUS: float = 15.0  # 지속시간 보너스 상한 (최대 15점)
+# 지표별 생명 위급도 가중치 (같은 단계 안에서 순위 결정, 지속시간 보너스도 이 비율로 축소)
+# 실제 데이터 검증: OR-1 저체온(35.3°C) 16분 노랑이 OR-3 저혈압·OR-4 BIS 각성 위험보다 1위가 되던 문제 보정
+PRIORITY_PARAM_WEIGHTS: dict = {
+    "spo2": 8.0,   # 저산소
+    "map": 8.0,    # 저/고혈압
+    "etco2": 5.0,  # 환기
+    "bis": 5.0,    # 마취 깊이(각성 위험)
+    "hr": 4.0,     # 서맥/빈맥
+    "bt": 1.0,     # 체온 (진행이 느려 즉시 대응 우선순위 낮음)
+}
 PRIORITY_W_TREND: float = 5.0            # 추세 가중치 (악화 +5, 호전 -5)
 
 # ── VitalDB 트랙 이름 ─────────────────────────────────────────

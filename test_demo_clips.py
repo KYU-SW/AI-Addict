@@ -52,6 +52,7 @@ async def main():
         await a.start()
 
     first_rank, top, top_changes, max_level = {}, None, [], {r: "green" for r in ROOM}
+    or1_wrongly_first = []
     for tick in range(rp.max_ticks):
         for r in ROOM:
             v = rp.get_vitals(r, tick)
@@ -68,6 +69,12 @@ async def main():
                 max_level[r] = lv
         ranked = sorted(ROOM, key=lambda r: -st[r].priority_score)
         leader = ranked[0] if st[ranked[0]].priority_score > 0 else None
+        # OR-1(체온 노랑만)이, 다른 방에 체온보다 급한 경보(MAP·BIS·HR 등)가 있는데도 1위인 순간 기록
+        # (다른 방도 체온 노랑뿐이면 동점이라 방 번호 순서로 OR-1이 앞설 수 있음 → 정상)
+        if leader == 1 and any(
+            a.parameter != "bt" for r in (2, 3, 4) for a in st[r].active_alerts
+        ):
+            or1_wrongly_first.append(tick)
         if leader != top:
             top_changes.append((tick, ROOM[leader] if leader else "없음(전부 정상)"))
             top = leader
@@ -98,7 +105,10 @@ async def main():
     leaders = [w for _, w in top_changes]
     checks = [
         ("OR-1 동맥압 순간 튐 걸러냄 (빨강 없음)", max_level[1] != "red"),
-        ("OR-1은 끝까지 초록 (안정 케이스)", max_level[1] == "green"),
+        # OR-1은 혈역학적으로 안정이지만 실제 체온이 35.3~35.4°C(경도 저체온)라 '체온 노랑'은 정상 판정.
+        # 기대 동작: 빨강·혈압·BIS 경보 없이 체온 주의만, 그리고 체온 노랑만으로는 OR-3·OR-4보다 1위가 되지 않음
+        ("OR-1 안정 케이스: 체온 주의 외 경보 없음", all(("OR-1" not in m) or ("체온" in m) for _, m in log)),
+        ("OR-1 체온 노랑만으로 다른 방의 급한 경보(MAP·BIS·HR)보다 1위가 되지 않음", not or1_wrongly_first),
         ("OR-2 BIS 0 → 센서 문제로 분류", any("OR-2 센서" in m for _, m in log)),
         ("OR-3 MAP<65 1분 → 노랑, 1위", any(t >= 300 and w == "OR-3" for t, w in top_changes)),
         ("OR-3 MAP<55 → 빨강", max_level[3] == "red"),

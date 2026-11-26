@@ -64,6 +64,14 @@
   /**
    * 바이탈 최신값 저장용 빈 객체 (모든 지표 null)
    */
+  /**
+   * 측정치 표시용 반올림 (실제 데이터의 float32 오차 35.400001525878906 → 35.4)
+   */
+  function formatMeasured(v, fallback) {
+    if (v == null || v === '' || isNaN(Number(v))) return fallback;
+    return String(Math.round(Number(v) * 10) / 10);
+  }
+
   function createEmptyVitals() {
     return {
       map: null,
@@ -665,7 +673,7 @@
       html += `
         <div class="${pillClass}">
           <span class="alert-msg-text">⚠ ${alert.message || (alert.parameter.toUpperCase() + ' 이상')}</span>
-          <span class="alert-val-text">${alert.value != null ? alert.value : ''}</span>
+          <span class="alert-val-text">${formatMeasured(alert.value, '')}</span>
         </div>
       `;
     });
@@ -1445,6 +1453,39 @@
   }
 
   // ── 11-B. 2단계 수술실 상세 모니터 모달 (Room Detail Modal) ─────────────────
+  // 상세 모달의 뇌파 δ/α/β 최근 60초 추세 차트 (1개를 만들어 열린 방의 기록으로 다시 그림)
+  let detailEegChart = null;
+
+  function renderDetailEegChart(roomId) {
+    const room = state.rooms[roomId];
+    const canvas = document.getElementById('detail-chart-eeg');
+    if (!room || !canvas || typeof Chart === 'undefined') return;
+    if (!detailEegChart) {
+      detailEegChart = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: Array(60).fill(''),
+          datasets: EEG_BANDS.map(([, color]) => ({
+            data: Array(60).fill(null), borderColor: color, borderWidth: 1.8,
+            pointRadius: 0, fill: false, tension: 0.35,
+          })),
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          scales: { x: { display: false }, y: { display: true, min: 0, max: 100, ticks: { stepSize: 50, color: '#8a8fa8', font: { size: 10 } } } },
+        },
+      });
+    }
+    EEG_BANDS.forEach(([band], i) => {
+      const h = (room.history.eeg && room.history.eeg[band] ? room.history.eeg[band] : []).slice(-60);
+      detailEegChart.data.datasets[i].data = Array(60 - h.length).fill(null).concat(h);
+    });
+    detailEegChart.update('none');
+  }
+
   function openRoomDetailModal(roomId) {
     state.activeDetailRoomId = Number(roomId);
     if (DOM.roomDetailModal) {
@@ -1493,6 +1534,7 @@
     setDetailBar('delta', dPct);
     setDetailBar('alpha', aPct);
     setDetailBar('beta', bPct);
+    renderDetailEegChart(roomId);
 
     const alertsBox = document.getElementById('detail-alerts-list');
     if (alertsBox) {
@@ -1741,7 +1783,13 @@
             if (a.parameter === data.parameter) room.activeAlerts.delete(key);
           });
           room.activeAlerts.set(data.id, data);
-          room.alertLevel = data.level || 'yellow';
+          // 방 단계 = 남은 경보 중 가장 심각한 단계 (한 지표가 RED→YELLOW로 내려와도 다른 RED가 있으면 유지)
+          let roomLevel = 'green';
+          room.activeAlerts.forEach((a) => {
+            if (a.level === 'red') roomLevel = 'red';
+            else if (a.level === 'yellow' && roomLevel !== 'red') roomLevel = 'yellow';
+          });
+          room.alertLevel = roomLevel;
           renderActiveAlerts(roomId);
           updateRoomTileBadgeAndBorder(roomId);
         }
@@ -1762,7 +1810,7 @@
           level: data.level || 'yellow',
           typeText: data.level === 'red' ? '위험 경보' : '주의 경보',
           description: data.message || `${(data.parameter || '').toUpperCase()} 이상 감지`,
-          details: `측정치: ${data.value != null ? data.value : '--'}`,
+          details: `측정치: ${formatMeasured(data.value, '--')}`,
         });
         break;
       }

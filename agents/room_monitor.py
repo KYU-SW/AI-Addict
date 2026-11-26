@@ -449,24 +449,26 @@ class RoomMonitorAgent(BaseAgent):
 
         # 3. 주의(YELLOW) 상태인 경우 (1분 지속성 규칙 적용)
         if condition_level == AlertLevel.YELLOW:
-            # 이전에 RED 경보였다면 RED는 해제 처리하고 YELLOW 지속성 검사 시작
+            # 이전에 RED 경보였다면, 경보를 끊지 않고 같은 지표의 YELLOW 경보로 바로 낮춤.
+            # (예전: RED 해제 후 YELLOW 60초를 처음부터 다시 셈 → 환자는 여전히 이상 범위인데
+            #  그 1분 동안 경보가 사라져 우선순위가 급락하는 문제. 실제 OR-3 MAP 54↔55 구간에서 확인)
             if param_name in self.active_alerts and self.active_alerts[param_name].level == AlertLevel.RED:
-                cleared_alert = self.active_alerts.pop(param_name)
-                await self.emit(
-                    EventType.ALERT_CLEARED,
-                    {
-                        "id": cleared_alert.id,
-                        "alert_id": cleared_alert.id,
-                        "room_id": self.room_id,
-                        "parameter": param_name,
-                        "message": f"{param_name.upper()} RED 상태 해제 (YELLOW로 호전)",
-                        "value": val,
-                        "timestamp": timestamp,
-                    },
-                    timestamp,
+                prev_red = self.active_alerts[param_name]
+                alert = Alert(
+                    room_id=self.room_id,
+                    level=AlertLevel.YELLOW,
+                    parameter=param_name,
+                    value=val,
+                    threshold=threshold,
+                    message=f"{msg} (위험 단계에서 호전, 주의 범위 지속)",
+                    timestamp=timestamp,
                 )
-                self._yellow_start_times[param_name] = timestamp
-                self._recovering_from_red.add(param_name)
+                self.active_alerts[param_name] = alert
+                self._yellow_start_times.pop(param_name, None)
+                self.logger.info("[Room %d] RED → YELLOW 하향: %s (RED 발생 시각 %.0f)",
+                                 self.room_id, param_name, prev_red.timestamp)
+                # 같은 지표 경보는 Supervisor·대시보드에서 '교체'되므로 ALERT_CLEARED 없이 ALERT만 발행
+                await self.emit(EventType.ALERT, alert.model_dump(), timestamp)
                 return
 
             # 이미 발령된 YELLOW 경보가 있는 경우 값만 갱신

@@ -43,8 +43,12 @@ class SupervisorAgent(BaseAgent):
             rid: RoomStatus(room_id=rid) for rid in self.room_ids
         }
 
-        # 각 방별 경보 시작 시각 기록 (room_id -> timestamp)
+        # 각 방별 경보 시작 시각 기록 (room_id -> timestamp) — 하위 호환용(seek 리셋 코드가 참조)
         self._alert_start_times: Dict[int, float] = {}
+
+        # 지표별 이상 시작 시각 ((room_id, parameter) -> timestamp)
+        # 같은 지표의 RED↔YELLOW 교체 중에는 유지되고, 그 지표 경보가 해제될 때만 지워짐
+        self._param_start_times: Dict[tuple, float] = {}
 
         # 각 방별 직전 틱 심각도 값 기록 (추세 계산용: room_id -> severity_value)
         self._prev_severity: Dict[int, float] = {rid: 0.0 for rid in self.room_ids}
@@ -128,9 +132,12 @@ class SupervisorAgent(BaseAgent):
         room_id = alert.room_id
         if room_id in self.room_statuses:
             status = self.room_statuses[room_id]
-            # 동일 파라미터 기존 경보 대체
+            # 동일 파라미터 기존 경보 대체 (RED↔YELLOW 교체 시 지표 이상 시작 시각은 유지)
+            already_active = any(a.parameter == alert.parameter for a in status.active_alerts)
             status.active_alerts = [a for a in status.active_alerts if a.parameter != alert.parameter]
             status.active_alerts.append(alert)
+            if not already_active or (room_id, alert.parameter) not in self._param_start_times:
+                self._param_start_times[(room_id, alert.parameter)] = event.timestamp
 
             self._recalculate_room_alert_level(room_id)
 
@@ -145,10 +152,13 @@ class SupervisorAgent(BaseAgent):
 
         if room_id in self.room_statuses:
             status = self.room_statuses[room_id]
+            removed = [a for a in status.active_alerts if a.id == alert_id or a.parameter == param]
             status.active_alerts = [
                 a for a in status.active_alerts
                 if a.id != alert_id and a.parameter != param
             ]
+            for a in removed:
+                self._param_start_times.pop((room_id, a.parameter), None)
             self._recalculate_room_alert_level(room_id)
 
     async def _on_drug_suggestion(self, event: Event) -> None:
@@ -195,19 +205,35 @@ class SupervisorAgent(BaseAgent):
     # ── 핵심 프로세스 ──────────────────────────────────────────
 
     @staticmethod
-    def _param_criticality_bonus(active_alerts: List[Alert]) -> float:
-        """활성 경보의 지표별 생명 위급도 가중치를 반환합니다 (SpO2/MAP > HR/EtCO2 > BIS/BT)."""
+    def _param_weight(parameter: str) -> float:
+        """지표별 생명 위급도 가중치 (config.PRIORITY_PARAM_WEIGHTS, 없으면 기본값)."""
+        weights = getattr(config, "PRIORITY_PARAM_WEIGHTS", None) or {
+            "spo2": 8.0, "map": 8.0, "etco2": 5.0, "bis": 5.0, "hr": 4.0, "bt": 1.0,
+        }
+        return float(weights.get(parameter, 2.0))
+
+    def _alert_score_bonus(self, room_id: int, active_alerts: List[Alert], tick: float) -> float:
+        """방 안 경보들 중 '가장 급한 지표 하나'의 점수 = 위급도 + 위급도 비례 지속시간 보너스.
+
+        지속시간 보너스를 지표 위급도에 비례시켜(최대 가중치 대비 비율), 체온처럼 덜 급한 지표가
+        오래 지속됐다는 이유만으로 MAP·BIS 같은 급한 지표의 신규 경보를 앞지르지 못하게 함.
+        예) 16분 지속 저체온(BT) = 1 + 15×(1/8) ≈ 2.9점 < 방금 시작된 BIS 주의 = 5점
+        """
         if not active_alerts:
             return 0.0
-        weights = {
-            "spo2": 8.0,
-            "map": 8.0,
-            "hr": 5.0,
-            "etco2": 5.0,
-            "bis": 3.0,
-            "bt": 2.0,
-        }
-        return max((weights.get(a.parameter, 2.0) for a in active_alerts), default=0.0)
+        top_level = AlertLevel.RED if any(a.level == AlertLevel.RED for a in active_alerts) else AlertLevel.YELLOW
+        max_bonus = getattr(config, "PRIORITY_DURATION_MAX_BONUS", 15.0)
+        max_weight = max(self._param_weight(p) for p in ("spo2", "map", "etco2", "bis", "hr", "bt"))
+        best = 0.0
+        for a in active_alerts:
+            if a.level != top_level:
+                continue  # 방의 최고 단계 경보만 비교 (RED 방이면 RED 지표끼리)
+            w = self._param_weight(a.parameter)
+            started = self._param_start_times.get((room_id, a.parameter), a.timestamp)
+            duration_min = max(0.0, tick - started) / 60.0
+            duration_bonus = min(max_bonus, duration_min * config.PRIORITY_W_DURATION) * (w / max_weight)
+            best = max(best, w + duration_bonus)
+        return best
 
     async def process(self, tick: float) -> None:
         """매 틱마다 전체 방의 우선순위를 계산하고 랭킹 및 비상 상황을 발행합니다.
@@ -215,9 +241,11 @@ class SupervisorAgent(BaseAgent):
         우선순위 산출 규칙 (계층 분리 + 분 단위 지속시간 상한):
         1. 계층(Tier) 절대 보장: RED(기본 100점) > YELLOW(기본 20점) > 센서점검(5점) > GREEN(0점)
            → YELLOW가 오래 지속되어도 방금 발생한 RED를 절대 역전하지 못함.
-        2. 지속시간 보너스: 초(sec) 단위가 아닌 분(min = duration_sec / 60) 단위로 가산하며,
-           최대 상한(PRIORITY_DURATION_MAX_BONUS = 15점)을 둠.
-        3. 지표 위급도 보너스: SpO2·MAP(+8) > HR·EtCO2(+5) > BIS(+3) > BT(+2).
+        2. 지표 위급도 + 지속시간 보너스: 방에서 가장 급한 지표 하나 기준.
+           위급도 SpO2·MAP(8) > EtCO2·BIS(5) > HR(4) > BT(1) (config.PRIORITY_PARAM_WEIGHTS),
+           지속시간은 분 단위 × 2점(상한 15점)에 '위급도/8' 비율을 곱함 → 덜 급한 지표가
+           오래 지속돼도 급한 지표의 신규 경보를 역전하지 못함. 같은 지표의 RED↔YELLOW 교체 중에는
+           지속시간이 이어짐.
         4. 추세 보너스: 악화(+5), 유지(0), 호전(-5).
         """
         for room_id, status in self.room_statuses.items():
@@ -232,17 +260,6 @@ class SupervisorAgent(BaseAgent):
                 severity_value = 0.0
                 base_score = 0.0
 
-            # 2. 경보 지속 시간 (분 단위로 환산 및 상한 적용)
-            if status.alert_level == AlertLevel.GREEN:
-                duration_sec = 0.0
-                duration_bonus = 0.0
-            else:
-                start_time = self._alert_start_times.get(room_id, tick)
-                duration_sec = max(0.0, tick - start_time)
-                duration_min = duration_sec / 60.0
-                max_bonus = getattr(config, "PRIORITY_DURATION_MAX_BONUS", 15.0)
-                duration_bonus = min(max_bonus, duration_min * config.PRIORITY_W_DURATION)
-
             # 3. 추세 판별
             prev_sev = self._prev_severity.get(room_id, 0.0)
             if severity_value > prev_sev:
@@ -254,7 +271,8 @@ class SupervisorAgent(BaseAgent):
             self._prev_severity[room_id] = severity_value
 
             # 4. 지표별 위급도 가중치 및 센서 점검 보너스
-            param_bonus = self._param_criticality_bonus(status.active_alerts)
+            # 지표 위급도 + (위급도 비례) 지속시간 보너스
+            param_bonus = self._alert_score_bonus(room_id, status.active_alerts, tick)
             sensor_bonus = 5.0 if status.sensor_problem else 0.0
 
             # 5. 최종 우선순위 점수 계산
@@ -264,7 +282,6 @@ class SupervisorAgent(BaseAgent):
                 score = (
                     base_score
                     + param_bonus
-                    + duration_bonus
                     + (trend * config.PRIORITY_W_TREND)
                     + sensor_bonus
                 )

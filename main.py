@@ -653,6 +653,8 @@ async def _clear_transient_agent_states(reset_drugs: bool = False) -> None:
         }
         if hasattr(supervisor, "_alert_start_times"):
             supervisor._alert_start_times.clear()
+        if hasattr(supervisor, "_param_start_times"):
+            supervisor._param_start_times.clear()
         if hasattr(supervisor, "_prev_severity"):
             supervisor._prev_severity = {rid: 0.0 for rid in supervisor.room_ids}
         if hasattr(supervisor, "_pending_suggestions"):
