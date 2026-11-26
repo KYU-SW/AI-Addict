@@ -23,6 +23,7 @@ class EventType(str, Enum):
     ALERT_CLEARED = "alert_cleared"
     SENSOR_ALERT = "sensor_alert"
     SENSOR_CLEARED = "sensor_cleared"
+    SUPPRESSION = "suppression"  # 경보 억제 내역 1건 (센서 잡음 / 일시 이탈) — 근거 포함
     DRUG_SUGGESTION = "drug_suggestion"
     SUGGESTION_CANCELLED = "suggestion_cancelled"
     APPROVAL_REQUEST = "approval_request"

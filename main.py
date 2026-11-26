@@ -874,6 +874,16 @@ if not STATIC_DIR.exists():
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.get("/api/suppressions")
+async def get_suppressions() -> JSONResponse:
+    """경보 억제 내역(센서 잡음·일시 이탈) 전체 — 대시보드에 새로 접속한 사람도 지금까지 내역을 볼 수 있게."""
+    records = []
+    for rm in room_monitors.values():
+        records.extend(getattr(rm, "suppression_log", []))
+    records.sort(key=lambda r: r.get("start", 0))
+    return JSONResponse(content={"success": True, "suppressions": records})
+
+
 @app.get("/api/jump_points")
 async def get_jump_points() -> JSONResponse:
     """시연 구간 바로가기 목록. 실제 케이스 재생기면 selected_cases.csv의 이상 시점, 가상 데이터면 빈 목록(HTML 기본 버튼 유지)."""

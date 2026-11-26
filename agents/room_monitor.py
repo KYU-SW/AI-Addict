@@ -14,7 +14,7 @@ from __future__ import annotations
 import collections
 import logging
 import statistics
-from typing import Deque, Dict, Optional, Tuple
+from typing import Deque, Dict, Optional, Tuple, Any, List
 
 import config
 from agents.base import BaseAgent
@@ -68,6 +68,12 @@ class RoomMonitorAgent(BaseAgent):
         self.suppressed_artifacts: int = 0
         self.suppressed_transients: int = 0
         self._noise_episode: set = set()          # 잡음으로 기각 중인 파라미터
+        # 억제 내역 기록 (대시보드 '경보 억제 내역' 창용, 최근 MAX_SUPPRESSION_LOG건)
+        self.suppression_log: List[Dict[str, Any]] = []
+        self._noise_info: Dict[str, Dict[str, Any]] = {}     # 잡음 사건별 시작 시각·대표 값
+        self._yellow_info: Dict[str, Dict[str, Any]] = {}    # 주의 이탈 사건별 최저/최고값·기준
+        self._flush_suspect: bool = False                    # MAP 상승 빨강 지연(동맥관 세척 의심) 발동 여부
+        self._sensor_record_ids: Dict[str, str] = {}         # 진행 중인 센서 이상 기록 id
         self._recovering_from_red: set = set()    # RED→YELLOW 호전 중인 파라미터 (일시 이탈 집계 제외)
         self._high_map_since: Optional[float] = None  # MAP 상승(>110) 시작 시각. 동맥관 플러싱(20~50초) 오경보 방지용
 
@@ -99,6 +105,8 @@ class RoomMonitorAgent(BaseAgent):
                     "bis",
                     f"센서 확인 필요: BIS 신호품질 저하 (SQI={vitals.sqi:.0f}% < {config.SQI_THRESHOLD:.0f}%)",
                     timestamp,
+                    value=vitals.sqi,
+                    value_label="SQI",
                 )
                 continue
 
@@ -117,6 +125,12 @@ class RoomMonitorAgent(BaseAgent):
                 noise_level, _, _ = self._evaluate_threshold(param_name, raw_val, vitals, record_baseline=False)
                 if noise_level != AlertLevel.GREEN:
                     self._noise_episode.add(param_name)
+                    info = self._noise_info.setdefault(
+                        param_name, {"start": timestamp, "value": raw_val, "level": noise_level}
+                    )
+                    # 대표 값: 처음 기각한 값, 이후 더 심각한(RED) 단계를 유발했을 값이 나오면 그 값으로 교체
+                    if (noise_level == AlertLevel.RED and info["level"] != AlertLevel.RED):
+                        info.update(value=raw_val, level=noise_level)
                 continue
 
             # 잡음 사건이 실제 급변으로 승격되지 않고 정상 복귀했다면 억제 1건으로 집계
@@ -124,6 +138,23 @@ class RoomMonitorAgent(BaseAgent):
             if param_name in self._noise_episode:
                 self._noise_episode.discard(param_name)
                 self.suppressed_artifacts += 1
+                info = self._noise_info.pop(param_name, None) or {"start": timestamp, "value": None}
+                dur = max(1.0, timestamp - info["start"])
+                outlier = (
+                    param_name == "map" and info["value"] is not None
+                    and (info["value"] < config.MAP_OUTLIER_LOW or info["value"] > config.MAP_OUTLIER_HIGH)
+                )
+                reason = (
+                    f"생리적으로 불가능한 값({config.MAP_OUTLIER_LOW:.0f} 미만/{config.MAP_OUTLIER_HIGH:.0f} 초과) → 측정 아티팩트로 기각"
+                    if outlier else
+                    f"직전 10초 중앙값 대비 {config.NOISE_SPIKE_RATIO * 100:.0f}% 이상 급변 후 "
+                    f"{config.NOISE_RECOVERY_SEC}초 안에 정상 복귀 → 순간 잡음으로 기각"
+                )
+                await self._record_suppression(
+                    category="sensor", kind="artifact", parameter=param_name,
+                    value=info["value"], start=info["start"], end=timestamp,
+                    reason=f"{reason} (지속 {dur:.0f}초)",
+                )
 
             # 3. 임계값 검사 및 이상 판별 (BIS=0 감별 및 EEG β파 보조 판정 포함)
             level, threshold, msg = self._evaluate_threshold(param_name, raw_val, vitals)
@@ -133,7 +164,7 @@ class RoomMonitorAgent(BaseAgent):
                 self._yellow_start_times.pop("bis", None)
                 if "bis" in self.active_alerts:
                     await self._handle_alert_state("bis", 0.0, AlertLevel.GREEN, 0.0, "", timestamp)
-                await self._set_sensor_issue("bis", msg, timestamp)
+                await self._set_sensor_issue("bis", msg, timestamp, value=raw_val)
                 continue
             elif param_name == "bis":
                 await self._clear_sensor_issue("bis", timestamp)
@@ -213,7 +244,10 @@ class RoomMonitorAgent(BaseAgent):
             return None
         return val * 100.0 if 0.0 < val <= 1.0 else float(val)
 
-    async def _set_sensor_issue(self, param_name: str, message: str, timestamp: float) -> None:
+    async def _set_sensor_issue(
+        self, param_name: str, message: str, timestamp: float, value: Optional[float] = None,
+        value_label: Optional[str] = None,
+    ) -> None:
         """센서 확인 필요 상태를 등록하고 최초 발생 시 SENSOR_ALERT 이벤트를 발행합니다."""
         # 메시지 문구(δ% 등 실시간 수치)는 매 틱 최신값으로 갱신하되,
         # 이벤트는 해당 파라미터의 센서 이상이 "새로 시작될 때" 한 번만 발행합니다.
@@ -222,6 +256,13 @@ class RoomMonitorAgent(BaseAgent):
         self.sensor_issues[param_name] = message
         if is_new_issue:
             self.logger.info("[Room %d] %s", self.room_id, message)
+            # 경보 억제 내역: 의료 RED 대신 '센서 점검'으로 분류한 사건 (복구되면 종료 시각 갱신)
+            rec = await self._record_suppression(
+                category="sensor", kind="sensor_fault", parameter=param_name, value=value,
+                start=timestamp, end=None, value_label=value_label,
+                reason=message.replace("센서 확인 필요: ", "") + " → 의료 위험 경보 대신 센서 점검으로 분류",
+            )
+            self._sensor_record_ids[param_name] = rec["id"]
             await self.emit(
                 EventType.SENSOR_ALERT,
                 {
@@ -237,6 +278,13 @@ class RoomMonitorAgent(BaseAgent):
         """센서 신호가 정상 복구되면 이슈를 해제하고 SENSOR_CLEARED 이벤트를 발행합니다."""
         if param_name in self.sensor_issues:
             self.sensor_issues.pop(param_name, None)
+            rec_id = self._sensor_record_ids.pop(param_name, None)
+            for rec in self.suppression_log:
+                if rec["id"] == rec_id:
+                    rec["end"] = timestamp
+                    rec["duration"] = round(timestamp - rec["start"], 1)
+                    await self.emit(EventType.SUPPRESSION, dict(rec), timestamp)
+                    break
             await self.emit(
                 EventType.SENSOR_CLEARED,
                 {
@@ -389,6 +437,7 @@ class RoomMonitorAgent(BaseAgent):
                 if (condition_level == AlertLevel.RED
                         and timestamp - self._high_map_since < getattr(config, "MAP_HIGH_RED_DELAY_SEC", 60)):
                     condition_level = AlertLevel.YELLOW
+                    self._flush_suspect = True  # 위험 수준 상승이 짧게 끝나면 동맥관 세척으로 분류
             else:
                 self._high_map_since = None
 
@@ -399,13 +448,39 @@ class RoomMonitorAgent(BaseAgent):
             self._recovering_from_red.discard(param_name)
             # 주의 범위 이탈이 60초 지속 전에 회복됨 → 경보 미발령(일시 이탈 억제) 1건 집계
             # 단, 너무 짧은 경계값 흔들림(TRANSIENT_SUPPRESS_MIN_SEC 미만)과 RED 호전 과정은 제외
+            y_info = self._yellow_info.pop(param_name, None)
+            flush = param_name == "map" and self._flush_suspect
+            if param_name == "map":
+                self._flush_suspect = False
             if (
                 yellow_started is not None
                 and not recovering
                 and param_name not in self.active_alerts
                 and timestamp - yellow_started >= getattr(config, "TRANSIENT_SUPPRESS_MIN_SEC", 5)
             ):
-                self.suppressed_transients += 1
+                dur = timestamp - yellow_started
+                info = y_info or {"low": val, "high": val, "threshold": threshold, "msg": ""}
+                if flush:
+                    # 위험 수준 MAP 상승이 60초 안에 끝남 → 동맥관 세척(플러싱) 압력으로 보고 센서 잡음으로 분류
+                    self.suppressed_artifacts += 1
+                    await self._record_suppression(
+                        category="sensor", kind="flush", parameter=param_name, value=info["high"],
+                        start=yellow_started, end=timestamp,
+                        reason=(f"MAP 최고 {info['high']:.0f}mmHg까지 상승했다가 {dur:.0f}초 만에 정상 복귀 "
+                                f"→ 동맥관 세척(플러싱) 압력으로 추정, 위험 경보 보류"),
+                    )
+                else:
+                    self.suppressed_transients += 1
+                    th = info["threshold"]
+                    is_low = info["low"] < th if th is not None else True
+                    extreme = info["low"] if is_low else info["high"]
+                    await self._record_suppression(
+                        category="transient", kind="transient", parameter=param_name, value=extreme,
+                        start=yellow_started, end=timestamp, threshold=th,
+                        direction="low" if is_low else "high",
+                        reason=(f"기준 {th:g} {'미만으로' if is_low else '초과로'} {dur:.0f}초 벗어났다가 회복 "
+                                f"→ {config.ALERT_PERSISTENCE_SEC}초 지속 기준 미달로 경보 보류"),
+                    )
             if param_name in self.active_alerts:
                 cleared_alert = self.active_alerts.pop(param_name)
                 self.logger.info("[Room %d] 경보 해제: %s (값: %.1f)", self.room_id, param_name, val)
@@ -427,6 +502,7 @@ class RoomMonitorAgent(BaseAgent):
         # 2. 위험(RED) 상태인 경우 (즉시 경보 발령)
         if condition_level == AlertLevel.RED:
             self._yellow_start_times.pop(param_name, None)
+            self._yellow_info.pop(param_name, None)
             self._recovering_from_red.discard(param_name)
             existing = self.active_alerts.get(param_name)
             if existing is None or existing.level != AlertLevel.RED:
@@ -479,6 +555,10 @@ class RoomMonitorAgent(BaseAgent):
             # 아직 발령되지 않은 YELLOW 상태: 지속 시간 계산
             if param_name not in self._yellow_start_times:
                 self._yellow_start_times[param_name] = timestamp
+            # 이탈 중 최저/최고값 추적 (60초 전 회복 시 '일시 이탈' 내역에 표시)
+            y = self._yellow_info.setdefault(param_name, {"low": val, "high": val, "threshold": threshold})
+            y["low"] = min(y["low"], val)
+            y["high"] = max(y["high"], val)
 
             elapsed = timestamp - self._yellow_start_times[param_name]
             if elapsed >= config.ALERT_PERSISTENCE_SEC:
@@ -496,6 +576,46 @@ class RoomMonitorAgent(BaseAgent):
                 self._recovering_from_red.discard(param_name)
                 self.logger.info("[Room %d] YELLOW 경보 발령 (60초 지속 충족): %s", self.room_id, msg)
                 await self.emit(EventType.ALERT, alert.model_dump(), timestamp)
+
+    async def _record_suppression(
+        self,
+        category: str,
+        kind: str,
+        parameter: str,
+        value: Optional[float],
+        start: float,
+        end: Optional[float],
+        reason: str,
+        threshold: Optional[float] = None,
+        direction: Optional[str] = None,
+        value_label: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """경보를 내지 않고 걸러낸 사건 1건을 근거와 함께 기록하고 SUPPRESSION 이벤트로 발행합니다.
+
+        category: "sensor"(장비·측정 문제: 센서 불량·순간 잡음·동맥관 세척)
+                  "transient"(값은 실제지만 기준선 근처를 잠깐 오르내려 60초 지속 기준 미달)
+        """
+        rec: Dict[str, Any] = {
+            "id": f"sup-{self.room_id}-{len(self.suppression_log) + 1}-{int(start)}",
+            "room_id": self.room_id,
+            "category": category,
+            "kind": kind,
+            "parameter": parameter,
+            "value": round(float(value), 1) if value is not None else None,
+            "value_label": value_label or parameter.upper(),
+            "threshold": threshold,
+            "direction": direction,
+            "start": start,
+            "end": end,
+            "duration": round(end - start, 1) if end is not None else None,
+            "reason": reason,
+        }
+        self.suppression_log.append(rec)
+        max_len = getattr(config, "MAX_SUPPRESSION_LOG", 300)
+        if len(self.suppression_log) > max_len:
+            del self.suppression_log[: len(self.suppression_log) - max_len]
+        await self.emit(EventType.SUPPRESSION, dict(rec), end if end is not None else start)
+        return rec
 
     def _update_overall_alert_level(self) -> None:
         """활성 경보 목록 중 가장 심각한 수준을 방의 종합 경보 수준으로 설정합니다."""
@@ -518,6 +638,11 @@ class RoomMonitorAgent(BaseAgent):
         self._noise_episode.clear()
         self._recovering_from_red.clear()
         self._high_map_since = None
+        self.suppression_log.clear()
+        self._noise_info.clear()
+        self._yellow_info.clear()
+        self._flush_suspect = False
+        self._sensor_record_ids.clear()
         self.suppressed_artifacts = 0
         self.suppressed_transients = 0
         self.current_alert_level = AlertLevel.GREEN

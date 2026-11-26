@@ -84,11 +84,14 @@
       </button>
 
       <!-- 가짜 경보/잡음 억제 카운터 배지 -->
-      <div class="filtered-noise-pill" id="filtered-noise-pill" title="에이전트가 걸러낸 순간 잡음·센서 불량·일시 이탈 횟수">
+      <!-- 경보 억제 내역 버튼 (센서 잡음 / 일시 이탈 건수, 클릭 시 내역 창) -->
+      <button type="button" class="btn-summary btn-suppression" id="btn-suppression-toggle"
+              title="에이전트가 경보를 내지 않고 걸러낸 내역 보기 (센서 잡음 / 일시 이탈)">
         <span class="icon">🛡️</span>
-        <span class="noise-label">가짜 경보 억제:</span>
-        <strong class="noise-count" id="filtered-noise-count">0</strong><span class="noise-unit">건</span>
-      </div>
+        <span class="btn-text">경보 억제 내역</span>
+        <span class="sup-count sensor" id="sup-count-sensor" title="센서 잡음">0</span>
+        <span class="sup-count transient" id="sup-count-transient" title="일시 이탈">0</span>
+      </button>
 
       <!-- 요약 통계 팝업 토글 버튼 -->
       <button type="button" class="btn-summary" id="btn-summary-toggle">
@@ -875,6 +878,41 @@
   </div>
 
   <!-- 통계 요약 오버레이 모달 -->
+  <!-- 경보 억제 내역 모달 -->
+  <div class="modal-overlay hidden" id="suppression-modal" role="dialog" aria-modal="true" aria-labelledby="sup-modal-title">
+    <div class="modal-card sup-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-icon">🛡️</span>
+          <h2 class="modal-title" id="sup-modal-title">에이전트 경보 억제 내역</h2>
+        </div>
+        <button type="button" class="btn-close-modal" id="btn-close-suppression" aria-label="닫기">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="sup-intro">
+          에이전트가 바로 경보를 내지 않고 걸러낸 사건입니다.
+          <strong>센서 잡음</strong>은 환자가 아니라 장비·측정 문제로 판단한 경우,
+          <strong>일시 이탈</strong>은 실제 값이지만 기준선 근처를 잠깐 벗어났다가 60초 안에 회복되어 경보를 보류한 경우입니다.
+        </p>
+        <div class="sup-tabs" role="tablist">
+          <button type="button" class="sup-tab active" data-tab="sensor" role="tab">🔧 센서 잡음 <span class="sup-tab-count" id="sup-tab-count-sensor">0</span></button>
+          <button type="button" class="sup-tab" data-tab="transient" role="tab">〰️ 일시 이탈 <span class="sup-tab-count" id="sup-tab-count-transient">0</span></button>
+        </div>
+        <div class="sup-room-filter" role="group" aria-label="수술실 필터">
+          <button type="button" class="sup-room-btn active" data-room="all">전체</button>
+          <button type="button" class="sup-room-btn" data-room="1">OR-1</button>
+          <button type="button" class="sup-room-btn" data-room="2">OR-2</button>
+          <button type="button" class="sup-room-btn" data-room="3">OR-3</button>
+          <button type="button" class="sup-room-btn" data-room="4">OR-4</button>
+        </div>
+        <div class="sup-list" id="sup-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-primary" id="btn-confirm-suppression">확인</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="summary-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-card">
       <div class="modal-header">

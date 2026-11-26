@@ -46,11 +46,11 @@
       totalSuggestions: 0,
       approvedSuggestions: 0,
       rejectedSuggestions: 0,
-      filteredNoiseCount: 0,     // 합계 (헤더 🛡️ 배지에 표시)
-      filteredSensorCount: 0,    // 센서 불량(sensor_alert) 사건 수
-      filteredArtifactCount: 0,  // 순간 잡음·아티팩트 기각 사건 수 (백엔드 누적치 증분)
-      filteredTransientCount: 0, // 60초 지속 전 회복된 일시 이탈 사건 수 (백엔드 누적치 증분)
     },
+    // 경보 억제 내역 (id → 기록). 백엔드 suppression 이벤트와 /api/suppressions로 채움
+    suppressions: new Map(),
+    supTab: 'sensor',
+    supRoom: 'all',
     // 최근 수신한 우선순위 랭킹 (센서 상태만 바뀌었을 때 좌측 카드 재렌더용)
     lastRankings: null,
     // 현재 상세 모니터 모달에 열려 있는 방 번호 (없으면 null)
@@ -104,8 +104,6 @@
       sensorProblem: false,
       sensorStatusFromBackend: false, // 최근 vital_update에 sensor_problem(boolean)이 실려 왔는지
       sensorIssues: [],
-      // 백엔드 억제 누적치의 마지막 수신값 (증분 계산용)
-      lastSuppressed: { artifacts: 0, transients: 0 },
       priorityScore: 0.0,
       priorityRank: roomId,
       phase: '유지기',
@@ -153,8 +151,11 @@
     btnAudioToggle: document.getElementById('btn-audio-toggle'),
     audioIcon: document.getElementById('audio-icon'),
     btnSummaryToggle: document.getElementById('btn-summary-toggle'),
-    filteredNoiseCount: document.getElementById('filtered-noise-count'),
-    filteredNoisePill: document.getElementById('filtered-noise-pill'),
+    btnSuppressionToggle: document.getElementById('btn-suppression-toggle'),
+    supCountSensor: document.getElementById('sup-count-sensor'),
+    supCountTransient: document.getElementById('sup-count-transient'),
+    suppressionModal: document.getElementById('suppression-modal'),
+    supList: document.getElementById('sup-list'),
 
     // 2단계 상세 모니터 모달
     roomDetailModal: document.getElementById('room-detail-modal'),
@@ -770,41 +771,164 @@
       .replace(/>/g, '&gt;');
   }
 
-  /**
-   * 헤더 🛡️ '가짜 경보 억제' 배지 갱신 (합계 + 툴팁에 유형별 내역)
-   */
-  function renderFilteredNoiseCounter() {
-    const st = state.stats;
-    st.filteredNoiseCount = st.filteredSensorCount + st.filteredArtifactCount + st.filteredTransientCount;
-    if (DOM.filteredNoiseCount) DOM.filteredNoiseCount.textContent = st.filteredNoiseCount;
-    if (DOM.filteredNoisePill) {
-      DOM.filteredNoisePill.title =
-        `에이전트가 걸러낸 가짜 경보 (사건 단위)\n` +
-        `· 센서 불량(BIS=0·SQI 저하): ${st.filteredSensorCount}건\n` +
-        `· 순간 잡음·아티팩트: ${st.filteredArtifactCount}건\n` +
-        `· 60초 전 회복된 일시 이탈: ${st.filteredTransientCount}건`;
+  // ── 경보 억제 내역 (센서 잡음 / 일시 이탈) ─────────────────────────────
+  const SUP_PARAM_NAMES = { map: 'MAP', hr: 'HR', spo2: 'SpO₂', bis: 'BIS', etco2: 'EtCO₂', bt: '체온', sqi: 'SQI' };
+  const SUP_PARAM_UNITS = { map: 'mmHg', hr: 'bpm', spo2: '%', bis: '', etco2: 'mmHg', bt: '°C' };
+  const SUP_KIND_NAMES = { sensor_fault: '센서 불량', artifact: '순간 잡음', flush: '동맥관 세척', transient: '일시 이탈' };
+
+  function escapeHtml(text) {
+    return String(text ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /** 억제 기록 추가/갱신 (센서 불량은 복구 시 같은 id로 종료 시각이 갱신됨) */
+  function upsertSuppression(rec) {
+    if (!rec || !rec.id) return;
+    state.suppressions.set(rec.id, rec);
+    renderSuppressionCounts();
+    if (DOM.suppressionModal && !DOM.suppressionModal.classList.contains('hidden')) renderSuppressionList();
+  }
+
+  function clearSuppressions() {
+    state.suppressions.clear();
+    renderSuppressionCounts();
+    if (DOM.suppressionModal && !DOM.suppressionModal.classList.contains('hidden')) renderSuppressionList();
+  }
+
+  function suppressionCounts() {
+    let sensor = 0;
+    let transient = 0;
+    state.suppressions.forEach((r) => {
+      if (r.category === 'transient') transient++;
+      else sensor++;
+    });
+    return { sensor, transient };
+  }
+
+  function renderSuppressionCounts() {
+    const c = suppressionCounts();
+    if (DOM.supCountSensor) DOM.supCountSensor.textContent = c.sensor;
+    if (DOM.supCountTransient) DOM.supCountTransient.textContent = c.transient;
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setTxt('sup-tab-count-sensor', c.sensor);
+    setTxt('sup-tab-count-transient', c.transient);
+    if (DOM.btnSuppressionToggle) {
+      DOM.btnSuppressionToggle.title =
+        `에이전트가 경보를 내지 않고 걸러낸 내역 보기\n· 센서 잡음(장비·측정 문제): ${c.sensor}건\n· 일시 이탈(60초 안에 회복): ${c.transient}건`;
     }
   }
 
-  /**
-   * vital_update에 실린 백엔드 억제 누적치를 증분으로 환산해 카운터에 더함.
-   * 백엔드는 리셋/구간 이동 시 누적치를 0으로 되돌리므로, 값이 줄어들면 기준점을 0으로 재설정.
-   */
-  function applySuppressedCounts(room, data) {
-    let changed = false;
-    [['suppressed_artifacts', 'artifacts', 'filteredArtifactCount'],
-     ['suppressed_transients', 'transients', 'filteredTransientCount']].forEach(([field, key, statKey]) => {
-      const cur = data[field];
-      if (typeof cur !== 'number' || !isFinite(cur)) return;
-      let last = room.lastSuppressed[key];
-      if (cur < last) last = 0;
-      if (cur > last) {
-        state.stats[statKey] += cur - last;
-        changed = true;
-      }
-      room.lastSuppressed[key] = cur;
+  /** 접속 직후 지금까지의 내역을 서버에서 받아 옴 (중간에 들어온 관람자용) */
+  async function loadSuppressions() {
+    try {
+      const res = await fetch('/api/suppressions');
+      const data = await res.json();
+      (data && data.suppressions ? data.suppressions : []).forEach((r) => state.suppressions.set(r.id, r));
+      renderSuppressionCounts();
+    } catch (err) {
+      console.warn('[AI-Addict] 억제 내역 로드 실패', err);
+    }
+  }
+
+  function supValueText(r) {
+    if (r.value == null) return '--';
+    const label = r.value_label === 'SQI' ? 'SQI' : (SUP_PARAM_NAMES[r.parameter] || r.value_label || r.parameter);
+    const unit = r.value_label === 'SQI' ? '%' : (SUP_PARAM_UNITS[r.parameter] || '');
+    return `${escapeHtml(label)} ${formatMeasured(r.value, '--')}${unit ? ' ' + unit : ''}`;
+  }
+
+  function supDurationText(r) {
+    if (r.end == null) return '<span class="sup-ongoing">진행 중</span>';
+    return `${Math.max(1, Math.round(r.duration || 0))}초`;
+  }
+
+  function renderSuppressionList() {
+    if (!DOM.supList) return;
+    const tab = state.supTab;
+    const roomFilter = state.supRoom;
+    const items = [...state.suppressions.values()].filter((r) =>
+      (tab === 'transient' ? r.category === 'transient' : r.category !== 'transient') &&
+      (roomFilter === 'all' || String(r.room_id) === roomFilter));
+
+    document.querySelectorAll('.sup-tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.sup-room-btn').forEach((b) => b.classList.toggle('active', b.dataset.room === roomFilter));
+
+    if (!items.length) {
+      DOM.supList.innerHTML = `<div class="sup-empty">${tab === 'transient'
+        ? '아직 일시 이탈 내역이 없습니다.'
+        : '아직 센서 잡음으로 걸러낸 내역이 없습니다.'}</div>`;
+      return;
+    }
+
+    if (tab === 'sensor') {
+      items.sort((a, b) => b.start - a.start);
+      DOM.supList.innerHTML = `
+        <table class="sup-table">
+          <thead><tr><th>시각</th><th>수술실</th><th>유형</th><th>걸러낸 값</th><th>지속</th><th>판단 근거</th></tr></thead>
+          <tbody>${items.map((r) => `
+            <tr>
+              <td class="mono">${formatTime(r.start)}</td>
+              <td><span class="sup-room">OR-${r.room_id}</span></td>
+              <td><span class="sup-kind ${escapeHtml(r.kind)}">${SUP_KIND_NAMES[r.kind] || escapeHtml(r.kind)}</span></td>
+              <td class="mono">${supValueText(r)}</td>
+              <td class="mono">${supDurationText(r)}</td>
+              <td class="sup-reason">${escapeHtml(r.reason)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`;
+      return;
+    }
+
+    // 일시 이탈: 같은 방·같은 지표·같은 방향끼리 묶어서 표시 (기준선 오르내림 반복을 한 줄로)
+    const groups = new Map();
+    items.forEach((r) => {
+      const key = `${r.room_id}|${r.parameter}|${r.direction || ''}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
     });
-    if (changed) renderFilteredNoiseCounter();
+    const rows = [...groups.values()].map((list) => {
+      list.sort((a, b) => a.start - b.start);
+      const first = list[0];
+      const last = list[list.length - 1];
+      const isLow = first.direction !== 'high';
+      const values = list.map((r) => r.value).filter((v) => v != null);
+      const extreme = values.length ? (isLow ? Math.min(...values) : Math.max(...values)) : null;
+      const name = SUP_PARAM_NAMES[first.parameter] || first.parameter;
+      const unit = SUP_PARAM_UNITS[first.parameter] || '';
+      return { list, first, last, isLow, extreme, name, unit };
+    }).sort((a, b) => b.list.length - a.list.length || b.last.start - a.last.start);
+
+    DOM.supList.innerHTML = rows.map((g) => `
+      <details class="sup-group">
+        <summary>
+          <span class="sup-room">OR-${g.first.room_id}</span>
+          <span class="sup-group-title">${escapeHtml(g.name)} ${g.first.threshold != null ? formatMeasured(g.first.threshold, '') : ''} ${g.isLow ? '미만' : '초과'} 경계 오르내림</span>
+          <span class="sup-group-count">${g.list.length}회</span>
+          <span class="sup-group-meta mono">${formatTime(g.first.start)} ~ ${formatTime(g.last.end ?? g.last.start)}</span>
+          <span class="sup-group-meta">${g.isLow ? '최저' : '최고'} ${formatMeasured(g.extreme, '--')}${g.unit ? ' ' + g.unit : ''}</span>
+        </summary>
+        <table class="sup-table compact">
+          <thead><tr><th>시각</th><th>${g.isLow ? '최저' : '최고'}값</th><th>지속</th><th>판단 근거</th></tr></thead>
+          <tbody>${g.list.slice().reverse().map((r) => `
+            <tr>
+              <td class="mono">${formatTime(r.start)}</td>
+              <td class="mono">${supValueText(r)}</td>
+              <td class="mono">${supDurationText(r)}</td>
+              <td class="sup-reason">${escapeHtml(r.reason)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </details>`).join('');
+  }
+
+  function openSuppressionModal() {
+    if (!DOM.suppressionModal) return;
+    renderSuppressionList();
+    DOM.suppressionModal.classList.remove('hidden');
+  }
+
+  function closeSuppressionModal() {
+    if (DOM.suppressionModal) DOM.suppressionModal.classList.add('hidden');
   }
 
   /**
@@ -1272,6 +1396,9 @@
       level: 'green',
     })));
 
+    // 구간 이동·리셋 시 서버도 억제 내역을 비우므로 화면도 함께 비움 (모든 관람자 화면 일치)
+    clearSuppressions();
+
     if (isFullReset) {
       state.stats.totalAlerts = 0;
       state.stats.yellowAlerts = 0;
@@ -1279,11 +1406,6 @@
       state.stats.totalSuggestions = 0;
       state.stats.approvedSuggestions = 0;
       state.stats.rejectedSuggestions = 0;
-      state.stats.filteredNoiseCount = 0;
-      state.stats.filteredSensorCount = 0;
-      state.stats.filteredArtifactCount = 0;
-      state.stats.filteredTransientCount = 0;
-      renderFilteredNoiseCounter();
       state.eventLogs = [];
       renderEventLog();
       applyPausedState(false);
@@ -1697,11 +1819,16 @@
           if (Array.isArray(data.sensor_issues)) {
             room.sensorIssues = data.sensor_issues;
           }
-          applySuppressedCounts(room, data);
         }
         const alertLevel = data.alert_level || (room ? room.alertLevel : 'green');
         renderRoomVitals(roomId, vitals, alertLevel);
         if (sensorChanged) refreshPriorityList();
+        break;
+      }
+
+      // 1-A. 경보 억제 내역 1건 (센서 잡음 / 일시 이탈)
+      case 'suppression': {
+        upsertSuppression(data);
         break;
       }
 
@@ -1718,9 +1845,6 @@
           refreshPriorityList();
           if (state.activeDetailRoomId === roomId) updateRoomDetailModal(roomId);
         }
-        // 백엔드는 센서 이상 사건 1건당 1회만 sensor_alert를 발행하므로 그대로 1건 집계
-        state.stats.filteredSensorCount++;
-        renderFilteredNoiseCounter();
         addEventLogEntry({
           timestamp: state.system.tick,
           roomId: roomId,
@@ -2043,6 +2167,21 @@
     DOM.btnConfirmSummary.addEventListener('click', closeSummaryModal);
     DOM.btnRefreshSummary.addEventListener('click', fetchSummaryData);
 
+    if (DOM.btnSuppressionToggle) DOM.btnSuppressionToggle.addEventListener('click', openSuppressionModal);
+    const btnCloseSup = document.getElementById('btn-close-suppression');
+    const btnConfirmSup = document.getElementById('btn-confirm-suppression');
+    if (btnCloseSup) btnCloseSup.addEventListener('click', closeSuppressionModal);
+    if (btnConfirmSup) btnConfirmSup.addEventListener('click', closeSuppressionModal);
+    if (DOM.suppressionModal) {
+      DOM.suppressionModal.addEventListener('click', (e) => {
+        if (e.target === DOM.suppressionModal) { closeSuppressionModal(); return; }
+        const tabBtn = e.target.closest('.sup-tab');
+        if (tabBtn) { state.supTab = tabBtn.dataset.tab; renderSuppressionList(); return; }
+        const roomBtn = e.target.closest('.sup-room-btn');
+        if (roomBtn) { state.supRoom = roomBtn.dataset.room; renderSuppressionList(); }
+      });
+    }
+
     DOM.summaryModal.addEventListener('click', (e) => {
       if (e.target === DOM.summaryModal) closeSummaryModal();
     });
@@ -2095,6 +2234,9 @@
     // 7. 키보드 단축키: ESC(모달 닫기), Space(일시정지/재개)
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (DOM.suppressionModal && !DOM.suppressionModal.classList.contains('hidden')) {
+          closeSuppressionModal();
+        }
         if (DOM.roomDetailModal && !DOM.roomDetailModal.classList.contains('hidden')) {
           closeRoomDetailModal();
         }
@@ -2152,6 +2294,7 @@
     DOM.systemTime.textContent = '00:00';
     DOM.maxTime.textContent = '/ 16:00';
     loadJumpPoints();
+    loadSuppressions();
 
     console.log('[AI-Addict] Dashboard App initialized successfully.');
   }
