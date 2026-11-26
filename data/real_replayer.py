@@ -53,6 +53,18 @@ class RealCaseReplayer:
     def max_ticks(self) -> int:
         return self._max_ticks
 
+    @staticmethod
+    def _short_label(case_type: str, note: str) -> str:
+        """바로가기 버튼용 짧은 한글 이름 (헤더 공간이 좁아 영문 type 대신 사용)."""
+        names = {"hypotension": "저혈압", "bis_excursion": "BIS 상승", "sensor_noise": "센서 잡음"}
+        if case_type in names:
+            return names[case_type]
+        if "동맥압" in note:
+            return "동맥압 튐"
+        if "BIS" in note:
+            return "BIS=0"
+        return "안정"
+
     async def load(self) -> None:
         # 파켓 읽기가 수십 초 걸릴 수 있어서 서버 이벤트 루프를 막지 않도록 별도 스레드에서
         await asyncio.to_thread(self._load_sync)
@@ -85,9 +97,10 @@ class RealCaseReplayer:
             if onset is not None:
                 tick = int(onset) - start - 10
                 if 0 <= tick < cr.length:
+                    note = str(row.get("note", ""))
                     self.jump_points.append({"tick": tick, "room": room,
-                                             "label": f"{room.replace('-', '')} {row['type']}",
-                                             "note": str(row.get("note", ""))})
+                                             "label": f"{room.replace('-', '')} {self._short_label(row['type'], note)}",
+                                             "note": note})
         self.jump_points.sort(key=lambda j: j["tick"])
         # 가장 긴 방 기준. 먼저 끝난 방은 get_vitals가 None → main.py가 그 방만 건너뜀
         self._max_ticks = max(r.length for r in self.rooms.values())

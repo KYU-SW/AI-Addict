@@ -2107,3 +2107,41 @@ body.view-only .suggestion-actions {
   position: relative;
   height: 90px;
 }
+
+/* ── 16. 헤더 글자 줄바꿈 방지 (실제 데이터 바로가기 버튼 4개 추가 후) ──
+   버튼이 좁아질 때 '일시정/지', '리/셋'처럼 단어 중간에서 줄이 바뀌던 문제 보정 */
+.app-header {
+  gap: 14px;
+}
+.header-brand {
+  flex-shrink: 0;
+}
+.brand-subtitle,
+.app-header button,
+.app-header .btn-jump,
+.filtered-noise-pill,
+.connection-status-pill,
+.speed-control-group,
+.time-label {
+  white-space: nowrap;
+}
+.header-center {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.scenario-jump-bar {
+  flex-wrap: nowrap;
+}
+.header-controls {
+  gap: 8px;
+  flex-shrink: 0;
+}
+.header-controls > * {
+  flex-shrink: 0;
+}
+
+/* 화면이 좁으면(노트북·배율 125% 이상) 부제목과 보조 문구를 숨겨 핵심 버튼 공간 확보 */
+@media (max-width: 1700px) {
+  .brand-subtitle { display: none; }
+  .speed-control-group .control-label { display: none; }
+}
