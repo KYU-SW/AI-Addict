@@ -36,6 +36,7 @@
       speed: 1,
       paused: false,
       connected: false,
+      canControl: true, // 서버가 can_control=false를 보내면 보기 전용
     },
     // 통계 누적치
     stats: {
@@ -45,12 +46,43 @@
       totalSuggestions: 0,
       approvedSuggestions: 0,
       rejectedSuggestions: 0,
+      filteredNoiseCount: 0,     // 합계 (헤더 🛡️ 배지에 표시)
+      filteredSensorCount: 0,    // 센서 불량(sensor_alert) 사건 수
+      filteredArtifactCount: 0,  // 순간 잡음·아티팩트 기각 사건 수 (백엔드 누적치 증분)
+      filteredTransientCount: 0, // 60초 지속 전 회복된 일시 이탈 사건 수 (백엔드 누적치 증분)
     },
+    // 최근 수신한 우선순위 랭킹 (센서 상태만 바뀌었을 때 좌측 카드 재렌더용)
+    lastRankings: null,
+    // 현재 상세 모니터 모달에 열려 있는 방 번호 (없으면 null)
+    activeDetailRoomId: null,
     // 알람 사운드 활성화 여부
     audioEnabled: false,
     // 현재 이벤트 필터
     currentLogFilter: 'all',
   };
+
+  /**
+   * 바이탈 최신값 저장용 빈 객체 (모든 지표 null)
+   */
+  function createEmptyVitals() {
+    return {
+      map: null,
+      hr: null,
+      spo2: null,
+      bis: null,
+      sqi: null,
+      sr: null,
+      etco2: null,
+      sbp: null,
+      dbp: null,
+      rr: null,
+      bt: null,
+      pip: null,
+      eeg_delta: null,
+      eeg_alpha: null,
+      eeg_beta: null,
+    };
+  }
 
   /**
    * 수술실 초기 상태 객체 생성
@@ -61,21 +93,15 @@
       roomId,
       alertLevel: 'green',        // 'green' | 'yellow' | 'red'
       isEmergency: false,
+      sensorProblem: false,
+      sensorStatusFromBackend: false, // 최근 vital_update에 sensor_problem(boolean)이 실려 왔는지
+      sensorIssues: [],
+      // 백엔드 억제 누적치의 마지막 수신값 (증분 계산용)
+      lastSuppressed: { artifacts: 0, transients: 0 },
       priorityScore: 0.0,
       priorityRank: roomId,
       phase: '유지기',
-      latestVitals: {
-        map: null,
-        hr: null,
-        spo2: null,
-        bis: null,
-        etco2: null,
-        sbp: null,
-        dbp: null,
-        rr: null,
-        bt: null,
-        pip: null,
-      },
+      latestVitals: createEmptyVitals(),
       // 스파크라인용 최근 기록 (최대 120개 유지)
       history: {
         map: [],
@@ -117,6 +143,14 @@
     btnAudioToggle: document.getElementById('btn-audio-toggle'),
     audioIcon: document.getElementById('audio-icon'),
     btnSummaryToggle: document.getElementById('btn-summary-toggle'),
+    filteredNoiseCount: document.getElementById('filtered-noise-count'),
+    filteredNoisePill: document.getElementById('filtered-noise-pill'),
+
+    // 2단계 상세 모니터 모달
+    roomDetailModal: document.getElementById('room-detail-modal'),
+    detailModalTitle: document.getElementById('detail-modal-title'),
+    btnCloseDetail: document.getElementById('btn-close-detail'),
+    btnConfirmDetail: document.getElementById('btn-confirm-detail'),
 
     // 우선순위 패널
     priorityList: document.getElementById('priority-list'),
@@ -391,7 +425,10 @@
       return '';
     });
 
+    // BIS 카드: 센서 불량일 때는 빨간색(critical) 대신 센서 점검(보라) 스타일 표시
+    const isBisSensorIssue = isBisSensorProblem(room, vitals);
     updateVitalCard(roomId, 'bis', vitals.bis, v => Math.round(v), v => {
+      if (isBisSensorIssue) return 'sensor-check';
       if (v < 30 || v > 70) return 'critical';
       if (v < 40 || v > 60) return 'warning';
       return '';
@@ -403,7 +440,7 @@
       return '';
     });
 
-    // 2. 보조 생체 지표 업데이트
+    // 2. 보조 생체 지표 및 SQI 업데이트
     const bpEl = document.getElementById(`val-${roomId}-bp`);
     if (bpEl) {
       const sbp = vitals.sbp != null ? Math.round(vitals.sbp) : '--';
@@ -420,16 +457,27 @@
     const pipEl = document.getElementById(`val-${roomId}-pip`);
     if (pipEl && vitals.pip != null) pipEl.textContent = Math.round(vitals.pip);
 
-    // 3. TCI 약물 목표치 업데이트 (데이터에 포함된 경우)
-    if (vitals.propofol_ce != null) {
-      room.drugTargets.propofol_ce = vitals.propofol_ce;
-      const el = document.getElementById(`val-${roomId}-propofol`);
-      if (el) el.textContent = Number(vitals.propofol_ce).toFixed(1);
+    const sqiEl = document.getElementById(`val-${roomId}-sqi`);
+    if (sqiEl) {
+      // SQI가 없는 데이터에서 임의 수치(95/0)를 지어내지 않고 '--'로 표시
+      sqiEl.textContent = vitals.sqi != null ? Math.round(vitals.sqi) : '--';
     }
-    if (vitals.remifentanil_ce != null) {
-      room.drugTargets.remifentanil_ce = vitals.remifentanil_ce;
+
+    // 2-B. 뇌파 3대역(δ·α·β) 비율 바 업데이트 (교수님 요구사항 D-05)
+    renderEegBands(roomId, vitals);
+
+    // 3. TCI 약물 목표치 업데이트 (ppf_ct / ppf_ce / propofol_ce 모두 호환)
+    const ppfVal = vitals.ppf_ct ?? vitals.ppf_ce ?? vitals.propofol_ce;
+    if (ppfVal != null) {
+      room.drugTargets.propofol_ce = ppfVal;
+      const el = document.getElementById(`val-${roomId}-propofol`);
+      if (el) el.textContent = Number(ppfVal).toFixed(1);
+    }
+    const rftnVal = vitals.rftn_ct ?? vitals.rftn_ce ?? vitals.remifentanil_ce;
+    if (rftnVal != null) {
+      room.drugTargets.remifentanil_ce = rftnVal;
       const el = document.getElementById(`val-${roomId}-remifentanil`);
-      if (el) el.textContent = Number(vitals.remifentanil_ce).toFixed(1);
+      if (el) el.textContent = Number(rftnVal).toFixed(1);
     }
 
     // 4. 스파크라인 차트 데이터 추가
@@ -437,8 +485,33 @@
     if (vitals.hr != null) updateSparkline(roomId, 'hr', vitals.hr);
     if (vitals.spo2 != null) updateSparkline(roomId, 'spo2', vitals.spo2);
 
-    // 5. 방 타일 레벨 스타일 갱신
+    // 5. 방 타일 레벨 스타일 갱신 및 상세 모달 실시간 동기화
     updateRoomTileBadgeAndBorder(roomId);
+    if (state.activeDetailRoomId === roomId) {
+      updateRoomDetailModal(roomId);
+    }
+  }
+
+  /**
+   * BIS 센서 불량(보라 sensor-check) 여부 판정
+   * 1) 백엔드(RoomMonitorAgent)가 vital_update에 sensor_problem을 실어 보냈다면 그 판정을 그대로 신뢰
+   *    (백엔드는 SQI·SR·δ파를 모두 본 3단계 감별 결과이므로 false면 BIS=0도 진짜 뇌파 억제 → critical)
+   * 2) 백엔드 판정이 없을 때만 폴백: BIS=0 이면서
+   *    - SQI가 명시적으로 50 미만이거나
+   *    - δ파가 30% 이상 살아 있고 SR(돌발억제비율)이 40% 이상 억제 상태가 아닐 때
+   *    → 센서 점검. SQI가 null인 것만으로는 센서 불량으로 보지 않음
+   *    (BIS=0, δ=5%, SQI=null 같은 진짜 뇌파 억제가 보라색으로 묻히는 버그 방지)
+   */
+  function isBisSensorProblem(room, vitals) {
+    if (room.sensorStatusFromBackend) return room.sensorProblem;
+    if (room.sensorProblem) return true;
+    if (vitals.bis !== 0) return false;
+
+    const sqiBad = vitals.sqi != null && vitals.sqi < 50;
+    const deltaPct = normalizePct(vitals.eeg_delta, null);
+    const srSuppressed = vitals.sr != null && vitals.sr >= 40;
+    const deltaAlive = deltaPct != null && deltaPct >= 30 && !srSuppressed;
+    return sqiBad || deltaAlive;
   }
 
   /**
@@ -451,14 +524,45 @@
 
     if (value == null || isNaN(value)) {
       valEl.textContent = '--';
-      card.classList.remove('warning', 'critical');
+      card.classList.remove('warning', 'critical', 'sensor-check');
       return;
     }
 
     valEl.textContent = formatter(value);
     const severity = validator(value);
-    card.classList.remove('warning', 'critical');
+    card.classList.remove('warning', 'critical', 'sensor-check');
     if (severity) card.classList.add(severity);
+  }
+
+  /**
+   * 0~1 비율 또는 0~100% 스케일의 뇌파 대역 값을 0~100 정수로 정규화하여 막대바 갱신
+   */
+  function normalizePct(val, fallback) {
+    if (val == null || isNaN(val)) return fallback;
+    const pct = (val > 0 && val <= 1.0) ? val * 100 : val;
+    return Math.max(0, Math.min(100, Math.round(pct)));
+  }
+
+  /**
+   * 방 타일의 뇌파 3대역 막대 갱신. 값이 없으면(리셋 직후, EEG 미수신) 막대 0 + '--' 표시
+   * @param {number} roomId
+   * @param {Object|null} vitals - null이면 빈 상태로 초기화
+   */
+  function renderEegBands(roomId, vitals) {
+    const v = vitals || {};
+    const dPct = normalizePct(v.eeg_delta, null);
+    const aPct = normalizePct(v.eeg_alpha, null);
+    const bPct = normalizePct(v.eeg_beta, null);
+
+    const setBand = (band, pct) => {
+      const barEl = document.getElementById(`bar-${roomId}-${band}`);
+      const valEl = document.getElementById(`val-${roomId}-${band}`);
+      if (barEl) barEl.style.width = `${pct ?? 0}%`;
+      if (valEl) valEl.textContent = pct != null ? `${pct}%` : '--';
+    };
+    setBand('delta', dPct);
+    setBand('alpha', aPct);
+    setBand('beta', bPct);
   }
 
   /**
@@ -483,6 +587,15 @@
       badge.textContent = '주의 경보';
     } else {
       badge.textContent = '정상';
+    }
+
+    // 센서 확인 필요 배지 토글
+    const sensorBadge = document.getElementById(`sensor-badge-${roomId}`);
+    if (sensorBadge) {
+      sensorBadge.classList.toggle('hidden', !room.sensorProblem);
+      if (room.sensorProblem && room.sensorIssues.length > 0) {
+        sensorBadge.title = room.sensorIssues.join(' / ');
+      }
     }
   }
 
@@ -521,6 +634,7 @@
    */
   function updatePriorityRankings(rankings) {
     if (!Array.isArray(rankings)) return;
+    state.lastRankings = rankings.map((item) => ({ ...item }));
 
     // 각 방 점수 반영
     rankings.forEach((item, index) => {
@@ -554,12 +668,23 @@
       if (level === 'red') levelText = '위험';
       else if (level === 'yellow') levelText = '주의';
 
+      // 센서 불량 방은 경보 단계와 별개로 '센서 점검' 배지를 함께 표시
+      const sensorProblem = !!(room && room.sensorProblem);
+      if (sensorProblem) card.classList.add('sensor-problem');
+      const sensorTitle = sensorProblem && room.sensorIssues.length > 0
+        ? ` title="${escapeAttr(room.sensorIssues.join(' / '))}"`
+        : '';
+      const sensorPill = sensorProblem
+        ? `<span class="priority-status-pill sensor"${sensorTitle}>⚠️ 센서 점검</span>`
+        : '';
+
       card.innerHTML = `
         <div class="rank-badge">${rank}</div>
         <div class="priority-info">
           <div class="priority-room-title">제 ${roomId} 수술실</div>
           <div class="priority-meta">
             <span class="priority-status-pill ${level}">${levelText}</span>
+            ${sensorPill}
             <span class="priority-score">점수: ${score}</span>
           </div>
         </div>
@@ -575,6 +700,58 @@
 
     DOM.priorityList.innerHTML = '';
     DOM.priorityList.appendChild(fragment);
+  }
+
+  /**
+   * 센서 상태만 바뀌었을 때(우선순위 이벤트 없이) 좌측 카드를 마지막 랭킹으로 다시 그림
+   */
+  function refreshPriorityList() {
+    if (state.lastRankings) updatePriorityRankings(state.lastRankings);
+  }
+
+  function escapeAttr(text) {
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  /**
+   * 헤더 🛡️ '가짜 경보 억제' 배지 갱신 (합계 + 툴팁에 유형별 내역)
+   */
+  function renderFilteredNoiseCounter() {
+    const st = state.stats;
+    st.filteredNoiseCount = st.filteredSensorCount + st.filteredArtifactCount + st.filteredTransientCount;
+    if (DOM.filteredNoiseCount) DOM.filteredNoiseCount.textContent = st.filteredNoiseCount;
+    if (DOM.filteredNoisePill) {
+      DOM.filteredNoisePill.title =
+        `에이전트가 걸러낸 가짜 경보 (사건 단위)\n` +
+        `· 센서 불량(BIS=0·SQI 저하): ${st.filteredSensorCount}건\n` +
+        `· 순간 잡음·아티팩트: ${st.filteredArtifactCount}건\n` +
+        `· 60초 전 회복된 일시 이탈: ${st.filteredTransientCount}건`;
+    }
+  }
+
+  /**
+   * vital_update에 실린 백엔드 억제 누적치를 증분으로 환산해 카운터에 더함.
+   * 백엔드는 리셋/구간 이동 시 누적치를 0으로 되돌리므로, 값이 줄어들면 기준점을 0으로 재설정.
+   */
+  function applySuppressedCounts(room, data) {
+    let changed = false;
+    [['suppressed_artifacts', 'artifacts', 'filteredArtifactCount'],
+     ['suppressed_transients', 'transients', 'filteredTransientCount']].forEach(([field, key, statKey]) => {
+      const cur = data[field];
+      if (typeof cur !== 'number' || !isFinite(cur)) return;
+      let last = room.lastSuppressed[key];
+      if (cur < last) last = 0;
+      if (cur > last) {
+        state.stats[statKey] += cur - last;
+        changed = true;
+      }
+      room.lastSuppressed[key] = cur;
+    });
+    if (changed) renderFilteredNoiseCounter();
   }
 
   /**
@@ -693,7 +870,7 @@
     if (!sug) return;
 
     try {
-      const res = await fetch(`/api/approve/${id}`, { method: 'POST' });
+      const res = await controlFetch(`/api/approve/${id}`);
       if (!res.ok) {
         // 서버에서 만료/거부된 제안(예: 응급 전환으로 취소)은 투약 변경을 반영하지 않음
         removeSuggestionFromList(id);
@@ -748,7 +925,7 @@
     if (!sug) return;
 
     try {
-      const rejRes = await fetch(`/api/reject/${id}`, { method: 'POST' });
+      const rejRes = await controlFetch(`/api/reject/${id}`);
       if (!rejRes.ok) {
         removeSuggestionFromList(id);
         showToast(`[OR ${sug.room_id}] 만료되었거나 처리할 수 없는 제안입니다.`, 'danger');
@@ -855,7 +1032,7 @@
   // ── 9. 재생 배속 제어 (/api/speed/{n}) ─────────────────────────────────────
   async function setPlaybackSpeed(speedMultiplier) {
     try {
-      await fetch(`/api/speed/${speedMultiplier}`, { method: 'POST' });
+      await controlFetch(`/api/speed/${speedMultiplier}`);
       applySpeedButtonState(speedMultiplier);
       showToast(`재생 배속: ${speedMultiplier}x 설정`, 'info');
     } catch (err) {
@@ -895,7 +1072,7 @@
 
   async function togglePauseSimulation() {
     try {
-      const res = await fetch('/api/pause', { method: 'POST' });
+      const res = await controlFetch('/api/pause');
       if (res.ok) {
         const data = await res.json();
         applyPausedState(data.paused);
@@ -913,7 +1090,7 @@
     if (timelineRequestBusy) return;
     timelineRequestBusy = true;
     try {
-      const res = await fetch(`/api/seek/${targetTick}`, { method: 'POST' });
+      const res = await controlFetch(`/api/seek/${targetTick}`);
       if (res.ok) {
         const data = await res.json();
         showToast(`타임라인 이동: ${formatTime(data.tick)} (${data.tick}초)`, 'info');
@@ -936,7 +1113,7 @@
     if (timelineRequestBusy) return;
     timelineRequestBusy = true;
     try {
-      const res = await fetch('/api/reset', { method: 'POST' });
+      const res = await controlFetch('/api/reset');
       // 화면 초기화는 WebSocket의 system(reset) 이벤트에서 1회만 수행합니다.
       // (여기서 다시 초기화하면 이미 도착한 00:00 데이터가 지워짐)
       if (res.ok) {
@@ -956,21 +1133,54 @@
    * 리셋 또는 타임라인 점프 시 클라이언트 UI 및 메모리 상태를 정리합니다.
    * @param {boolean} isFullReset - true면 누적 통계, 로그, 약물 농도까지 완전 초기화
    */
+  /**
+   * 한 수술실 타일의 수치 표시(바이탈 카드·보조 지표·SQI·뇌파 막대·스파크라인 현재값)를 빈 상태로 되돌림
+   * @param {number} roomId
+   */
+  function clearRoomVitalsDisplay(roomId) {
+    // 핵심 5종 카드: 수치 '--' + warning/critical/sensor-check 색상 제거
+    ['map', 'hr', 'spo2', 'bis', 'etco2'].forEach((param) => {
+      const card = document.getElementById(`vital-card-${roomId}-${param}`);
+      const valEl = document.getElementById(`val-${roomId}-${param}`);
+      if (card) card.classList.remove('warning', 'critical', 'sensor-check');
+      if (valEl) valEl.textContent = '--';
+    });
+
+    // 보조 지표 및 SQI
+    const setTxt = (id, txt) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = txt;
+    };
+    setTxt(`val-${roomId}-bp`, '-- / --');
+    ['rr', 'bt', 'pip', 'sqi'].forEach((p) => setTxt(`val-${roomId}-${p}`, '--'));
+    ['map', 'hr', 'spo2'].forEach((p) => setTxt(`spark-val-${roomId}-${p}`, '--'));
+
+    // 뇌파 3대역 막대 비우기
+    renderEegBands(roomId, null);
+  }
+
   function resetClientState(isFullReset = true) {
     state.pendingSuggestions.clear();
     renderSuggestionsList();
     DOM.emergencyModal.classList.add('hidden');
+    // 이전 구간 수치가 남은 상세 모달은 닫음 (새 구간 데이터가 오면 다시 열 수 있음)
+    closeRoomDetailModal();
 
     for (let r = 1; r <= 4; r++) {
       const room = state.rooms[r];
       room.alertLevel = 'green';
       room.isEmergency = false;
+      room.sensorProblem = false;
+      room.sensorStatusFromBackend = false;
+      room.sensorIssues = [];
       room.priorityScore = 0.0;
       room.priorityRank = r;
       room.activeAlerts.clear();
+      room.latestVitals = createEmptyVitals();
       room.history.map = [];
       room.history.hr = [];
       room.history.spo2 = [];
+      clearRoomVitalsDisplay(r);
 
       if (isFullReset) {
         room.drugTargets.propofol_ce = 3.0;
@@ -1007,6 +1217,11 @@
       state.stats.totalSuggestions = 0;
       state.stats.approvedSuggestions = 0;
       state.stats.rejectedSuggestions = 0;
+      state.stats.filteredNoiseCount = 0;
+      state.stats.filteredSensorCount = 0;
+      state.stats.filteredArtifactCount = 0;
+      state.stats.filteredTransientCount = 0;
+      renderFilteredNoiseCounter();
       state.eventLogs = [];
       renderEventLog();
       applyPausedState(false);
@@ -1175,6 +1390,123 @@
     DOM.summaryTableBody.innerHTML = rowsHtml;
   }
 
+  // ── 11-B. 2단계 수술실 상세 모니터 모달 (Room Detail Modal) ─────────────────
+  function openRoomDetailModal(roomId) {
+    state.activeDetailRoomId = Number(roomId);
+    if (DOM.roomDetailModal) {
+      DOM.roomDetailModal.classList.remove('hidden');
+      updateRoomDetailModal(state.activeDetailRoomId);
+    }
+  }
+
+  function closeRoomDetailModal() {
+    state.activeDetailRoomId = null;
+    if (DOM.roomDetailModal) {
+      DOM.roomDetailModal.classList.add('hidden');
+    }
+  }
+
+  function updateRoomDetailModal(roomId) {
+    const room = state.rooms[roomId];
+    if (!room || !DOM.roomDetailModal || DOM.roomDetailModal.classList.contains('hidden')) return;
+
+    const v = room.latestVitals;
+    if (DOM.detailModalTitle) {
+      DOM.detailModalTitle.textContent = `제 ${roomId} 수술실 (OR ${roomId}) 상세 생체신호 & 뇌파 모니터`;
+    }
+    const setTxt = (id, txt) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = txt;
+    };
+    setTxt('detail-room-status', `경보 상태: ${room.alertLevel.toUpperCase()}`);
+    setTxt('detail-room-score', `우선순위 점수: ${room.priorityScore.toFixed(1)}점 (${room.priorityRank}위)`);
+    setTxt('detail-room-sensor', room.sensorProblem ? `⚠️ ${room.sensorIssues.join(', ') || '센서 확인 필요'}` : '신호 품질: 정상');
+    setTxt('detail-val-map', v.map != null ? Math.round(v.map) : '--');
+    setTxt('detail-val-hr', v.hr != null ? Math.round(v.hr) : '--');
+    setTxt('detail-val-spo2', v.spo2 != null ? Math.round(v.spo2) : '--');
+    setTxt('detail-val-bis', v.bis != null ? Math.round(v.bis) : '--');
+    setTxt('detail-val-sqi', v.sqi != null ? `SQI ${Math.round(v.sqi)}%` : 'SQI --');
+
+    const dPct = normalizePct(v.eeg_delta, null);
+    const aPct = normalizePct(v.eeg_alpha, null);
+    const bPct = normalizePct(v.eeg_beta, null);
+    const setDetailBar = (band, pct) => {
+      const bar = document.getElementById(`detail-bar-${band}`);
+      const val = document.getElementById(`detail-val-${band}`);
+      if (bar) bar.style.width = `${pct ?? 0}%`;
+      if (val) val.textContent = pct != null ? `${pct}%` : '--';
+    };
+    setDetailBar('delta', dPct);
+    setDetailBar('alpha', aPct);
+    setDetailBar('beta', bPct);
+
+    const alertsBox = document.getElementById('detail-alerts-list');
+    if (alertsBox) {
+      // 센서 이슈가 있어도 다른 지표(MAP·SpO₂ 등)의 실제 의료 경보는 함께 보여야 하므로 둘 다 나열
+      let html = '';
+      room.activeAlerts.forEach((a) => {
+        html += `<div class="alert-item-pill ${a.level === 'red' ? 'red' : ''}">⚠ ${a.message}</div>`;
+      });
+      if (room.sensorProblem) {
+        html += `<div class="alert-item-pill sensor">⚠️ ${room.sensorIssues.join('<br/>') || '센서 확인 필요'}</div>`;
+      }
+      alertsBox.innerHTML = html || '<span class="no-alerts-msg">✓ 정상 생체징후 유지 중</span>';
+    }
+  }
+
+  // ── 11-1. 조작 권한 (보기 전용 모드) ────────────────────────────────────────
+  // 배포 서버에 ADMIN_KEY가 설정된 경우, 관리자는 https://주소/?key=비밀키 로 한 번 접속하면
+  // 키가 이 탭(sessionStorage)에 저장되고 주소창에서는 지워집니다(링크 공유 시 키 노출 방지).
+  // 키가 없거나 틀리면 서버가 can_control=false를 보내고 화면은 보기 전용으로 바뀝니다.
+  const ADMIN_KEY_STORAGE = 'aiaddict_admin_key';
+  let adminKey = '';
+  try {
+    const params = new URLSearchParams(location.search);
+    const urlKey = params.get('key');
+    if (urlKey) {
+      sessionStorage.setItem(ADMIN_KEY_STORAGE, urlKey);
+      params.delete('key');
+      const qs = params.toString();
+      history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
+    }
+    adminKey = sessionStorage.getItem(ADMIN_KEY_STORAGE) || '';
+  } catch (e) {
+    adminKey = '';
+  }
+
+  /**
+   * 조작용 POST 요청 (관리자 키가 있으면 X-Admin-Key 헤더로 전달)
+   */
+  async function controlFetch(url) {
+    const headers = adminKey ? { 'X-Admin-Key': adminKey } : {};
+    const res = await fetch(url, { method: 'POST', headers });
+    if (res.status === 403) {
+      applyControlMode(false);
+      showToast('보기 전용 접속입니다. 조작 권한이 없습니다.', 'danger');
+    }
+    return res;
+  }
+
+  /**
+   * 조작 가능/보기 전용 화면 전환
+   * @param {boolean} canControl
+   */
+  function applyControlMode(canControl) {
+    state.system.canControl = canControl;
+    document.body.classList.toggle('view-only', !canControl);
+    let pill = document.getElementById('view-only-pill');
+    if (!canControl && !pill) {
+      pill = document.createElement('div');
+      pill.id = 'view-only-pill';
+      pill.className = 'view-only-pill';
+      pill.title = '발표자(관리자)만 재생·구간 이동·투약 승인을 조작할 수 있습니다.';
+      pill.textContent = '👁 보기 전용';
+      const controls = document.querySelector('.header-controls');
+      if (controls) controls.prepend(pill);
+    }
+    if (pill) pill.classList.toggle('hidden', canControl);
+  }
+
   // ── 12. 웹소켓 연결 및 프로토콜 파싱 (WebSocket Protocol) ───────────────────
   let ws = null;
   let reconnectAttempts = 0;
@@ -1184,7 +1516,7 @@
   function connectWebSocket() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = location.host || 'localhost:8000';
-    const wsUrl = `${protocol}//${host}/ws`;
+    const wsUrl = `${protocol}//${host}/ws` + (adminKey ? `?key=${encodeURIComponent(adminKey)}` : '');
 
     updateConnectionStatus('connecting');
 
@@ -1192,7 +1524,7 @@
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log('[WebSocket] Connected successfully to', wsUrl);
+        console.log('[WebSocket] Connected successfully to', wsUrl.replace(/\?key=.*/, '?key=***'));
         state.system.connected = true;
         reconnectAttempts = 0;
         updateConnectionStatus('connected');
@@ -1258,8 +1590,90 @@
       case 'vital_update': {
         const roomId = data.room_id;
         const vitals = data.vitals || data;
-        const alertLevel = data.alert_level || (state.rooms[roomId] ? state.rooms[roomId].alertLevel : 'green');
+        const room = state.rooms[roomId];
+        let sensorChanged = false;
+        if (room) {
+          if (typeof data.sensor_problem === 'boolean') {
+            sensorChanged = room.sensorProblem !== data.sensor_problem;
+            room.sensorProblem = data.sensor_problem;
+            room.sensorStatusFromBackend = true;
+          }
+          if (Array.isArray(data.sensor_issues)) {
+            room.sensorIssues = data.sensor_issues;
+          }
+          applySuppressedCounts(room, data);
+        }
+        const alertLevel = data.alert_level || (room ? room.alertLevel : 'green');
         renderRoomVitals(roomId, vitals, alertLevel);
+        if (sensorChanged) refreshPriorityList();
+        break;
+      }
+
+      // 1-B. 센서/신호 품질 확인 알림 (Sensor Alert & Cleared)
+      case 'sensor_alert': {
+        const roomId = data.room_id;
+        const room = state.rooms[roomId];
+        if (room) {
+          room.sensorProblem = true;
+          if (data.message && !room.sensorIssues.includes(data.message)) {
+            room.sensorIssues.push(data.message);
+          }
+          updateRoomTileBadgeAndBorder(roomId);
+          refreshPriorityList();
+          if (state.activeDetailRoomId === roomId) updateRoomDetailModal(roomId);
+        }
+        // 백엔드는 센서 이상 사건 1건당 1회만 sensor_alert를 발행하므로 그대로 1건 집계
+        state.stats.filteredSensorCount++;
+        renderFilteredNoiseCounter();
+        addEventLogEntry({
+          timestamp: state.system.tick,
+          roomId: roomId,
+          category: 'info',
+          level: 'purple',
+          typeText: '센서 확인 필요',
+          description: data.message || '센서 신호 불량 감지 (가짜 의료 경보 억제됨)',
+          details: `파라미터: ${(data.parameter || 'bis').toUpperCase()}`,
+        });
+        break;
+      }
+
+      case 'sensor_cleared': {
+        const roomId = data.room_id;
+        const room = state.rooms[roomId];
+        if (room) {
+          room.sensorProblem = false;
+          room.sensorIssues = [];
+          updateRoomTileBadgeAndBorder(roomId);
+          refreshPriorityList();
+          if (state.activeDetailRoomId === roomId) updateRoomDetailModal(roomId);
+        }
+        addEventLogEntry({
+          timestamp: state.system.tick,
+          roomId: roomId,
+          category: 'info',
+          level: 'green',
+          typeText: '센서 복구',
+          description: data.message || '센서 신호 정상 복구',
+          details: '',
+        });
+        break;
+      }
+
+      // 1-C. 응급 진입 등으로 인한 대기 투약 제안 자동 취소
+      case 'suggestion_cancelled': {
+        const sugId = data.suggestion_id;
+        if (sugId && state.pendingSuggestions.has(sugId)) {
+          removeSuggestionFromList(sugId);
+        }
+        addEventLogEntry({
+          timestamp: state.system.tick,
+          roomId: data.room_id || 1,
+          category: 'drug',
+          level: 'yellow',
+          typeText: '제안 자동 취소',
+          description: data.reason || '응급(RED) 경보 진입으로 대기 중이던 투약 제안 자동 취소',
+          details: sugId ? `ID: ${sugId}` : '',
+        });
         break;
       }
 
@@ -1418,6 +1832,10 @@
 
       // 8. 시스템 상태 (System: tick, speed, max_ticks, paused, reset, seek)
       case 'system': {
+        // 접속 직후 1회 서버가 이 연결의 조작 권한을 알려줌
+        if (typeof data.can_control === 'boolean') {
+          applyControlMode(data.can_control);
+        }
         if (data.reset) {
           resetClientState(true);
         } else if (data.seek) {
@@ -1523,6 +1941,31 @@
       if (e.target === DOM.summaryModal) closeSummaryModal();
     });
 
+    // 3-B. 2단계 수술실 상세 모니터 모달 이벤트 (방 헤더 또는 좌측 우선순위 카드 클릭 시 열기)
+    if (DOM.btnCloseDetail) DOM.btnCloseDetail.addEventListener('click', closeRoomDetailModal);
+    if (DOM.btnConfirmDetail) DOM.btnConfirmDetail.addEventListener('click', closeRoomDetailModal);
+    if (DOM.roomDetailModal) {
+      DOM.roomDetailModal.addEventListener('click', (e) => {
+        if (e.target === DOM.roomDetailModal) closeRoomDetailModal();
+      });
+    }
+    for (let r = 1; r <= 4; r++) {
+      const tileHeader = document.querySelector(`#room-tile-${r} .room-header`);
+      if (tileHeader) {
+        tileHeader.style.cursor = 'pointer';
+        tileHeader.title = '클릭하여 수술실 상세 뇌파·생체신호 모니터 열기';
+        tileHeader.addEventListener('click', () => openRoomDetailModal(r));
+      }
+    }
+    if (DOM.priorityList) {
+      DOM.priorityList.addEventListener('click', (e) => {
+        const card = e.target.closest('.priority-card');
+        if (card && card.dataset.room) {
+          openRoomDetailModal(Number(card.dataset.room));
+        }
+      });
+    }
+
     // 4. 응급 모달 해제
     DOM.btnEmergencyDismiss.addEventListener('click', dismissEmergencyModal);
 
@@ -1546,6 +1989,9 @@
     // 7. 키보드 단축키: ESC(모달 닫기), Space(일시정지/재개)
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (DOM.roomDetailModal && !DOM.roomDetailModal.classList.contains('hidden')) {
+          closeRoomDetailModal();
+        }
         if (!DOM.summaryModal.classList.contains('hidden')) {
           closeSummaryModal();
         }

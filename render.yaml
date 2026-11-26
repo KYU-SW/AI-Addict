@@ -1,0 +1,13 @@
+# Render 블루프린트: GitHub 저장소 루트에 두면 Render가 이 설정대로 웹 서비스를 만듭니다.
+services:
+  - type: web
+    name: ai-addict
+    runtime: python
+    plan: free                # 무료: 15분간 접속이 없으면 잠들고, 다음 접속 시 수십 초 걸려 깨어남
+    region: singapore         # 한국에서 가장 가까운 리전
+    buildCommand: pip install -r requirements-server.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: ADMIN_KEY        # 발표자용 조작 비밀키 (Render 화면에서 직접 입력, 코드에 적지 않음)
+        sync: false

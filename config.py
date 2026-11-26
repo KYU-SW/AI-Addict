@@ -59,6 +59,7 @@ BT_WARNING_HIGH: float = 38.0
 ALERT_PERSISTENCE_SEC: int = 60     # 주의 상태 지속 → 경보 (초)
 NOISE_SPIKE_RATIO: float = 0.3     # 30 % 급변 = 잡음 의심
 NOISE_RECOVERY_SEC: int = 5        # 잡음 복귀 판정 시간 (초)
+TRANSIENT_SUPPRESS_MIN_SEC: int = 5  # 이 시간 이상 이탈 후 60초 전 회복 시 '일시 이탈 억제' 1건으로 집계 (초)
 
 # ── 투약 제안 ──────────────────────────────────────────────────
 DRUG_UNIT: float = 0.5             # 기본 0.5 단위 증감 (호환용)

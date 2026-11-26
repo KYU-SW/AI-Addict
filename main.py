@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import hmac
+import os
 from datetime import datetime
 from enum import Enum
 import json
@@ -18,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -43,6 +45,28 @@ logger = logging.getLogger("ai_addict.main")
 # ── 정적 파일 디렉터리 경로 ────────────────────────────────────
 BASE_DIR: Path = Path(__file__).resolve().parent
 STATIC_DIR: Path = BASE_DIR / "static"
+
+# ── 조작 권한 (보기 전용 모드) ──────────────────────────────────
+# 환경변수 ADMIN_KEY가 설정되어 있으면(배포 서버) 리셋·구간 이동·배속·일시정지·투약 승인/반려는
+# 같은 키를 가진 접속(관리자)만 할 수 있고, 나머지 방문자는 화면만 볼 수 있습니다.
+# ADMIN_KEY가 없으면(로컬 실행) 지금처럼 누구나 조작할 수 있습니다.
+ADMIN_KEY: str = os.environ.get("ADMIN_KEY", "").strip()
+CONTROL_API_PREFIXES = (
+    "/api/approve/",
+    "/api/reject/",
+    "/api/speed/",
+    "/api/pause",
+    "/api/seek/",
+    "/api/reset",
+)
+
+
+def is_admin_key(key: Optional[str]) -> bool:
+    """ADMIN_KEY 미설정이면 항상 True, 설정되어 있으면 키 일치 여부(타이밍 공격 방지 비교)."""
+    if not ADMIN_KEY:
+        return True
+    return bool(key) and hmac.compare_digest(str(key), ADMIN_KEY)
+
 
 # ── 전역 상태 (Global State) ──────────────────────────────────
 event_bus: EventBus = EventBus()
@@ -337,6 +361,30 @@ app = FastAPI(
 )
 
 
+# ── 조작 API 권한 검사 미들웨어 ─────────────────────────────────
+
+@app.middleware("http")
+async def require_admin_for_control(request: Request, call_next):
+    """조작용 POST API는 X-Admin-Key 헤더가 ADMIN_KEY와 일치할 때만 허용."""
+    if (
+        ADMIN_KEY
+        and request.method == "POST"
+        and request.url.path.startswith(CONTROL_API_PREFIXES)
+        and not is_admin_key(request.headers.get("x-admin-key"))
+    ):
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "error": "보기 전용 접속입니다. 조작 권한이 없습니다."},
+        )
+    return await call_next(request)
+
+
+@app.get("/healthz")
+async def healthz() -> JSONResponse:
+    """배포 플랫폼(Render 등) 상태 확인용 엔드포인트."""
+    return JSONResponse(content={"ok": True, "tick": current_tick})
+
+
 # ── 웹소켓 엔드포인트 ──────────────────────────────────────────
 
 @app.websocket("/ws")
@@ -348,6 +396,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     응급(EMERGENCY), 종합 상태(ROOM_STATUS) 이벤트를 JSON으로 실시간 전달합니다.
     """
     await websocket.accept()
+    # 접속 주소의 ?key= 값으로 이 연결의 조작 권한 결정
+    can_control: bool = is_admin_key(websocket.query_params.get("key"))
 
     async def ws_send_handler(event: Event) -> None:
         """이벤트 버스에서 발행된 이벤트를 직렬화하여 웹소켓 클라이언트로 전송."""
@@ -367,6 +417,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 "max_ticks": replayer.max_ticks if replayer else config.DEMO_DURATION,
                 "running": simulation_running,
                 "paused": simulation_paused,
+                "can_control": can_control,
             },
             source="system",
             timestamp=float(current_tick),
@@ -394,6 +445,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             try:
                 msg = json.loads(client_text)
                 action = msg.get("action")
+                if action and not can_control:
+                    logger.info("보기 전용 접속의 제어 요청 무시: %s", action)
+                    continue
                 if action == "approve" and "suggestion_id" in msg and supervisor:
                     await supervisor.handle_approval(str(msg["suggestion_id"]), True)
                 elif action == "reject" and "suggestion_id" in msg and supervisor:
@@ -832,4 +886,5 @@ async def serve_static_root_asset(file_name: str) -> Any:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    # 배포 플랫폼이 PORT 환경변수를 지정하면 그 포트를, 없으면 8000번을 사용
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), reload=False)

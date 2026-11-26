@@ -83,6 +83,13 @@
         <span class="btn-text">알람음</span>
       </button>
 
+      <!-- 가짜 경보/잡음 억제 카운터 배지 -->
+      <div class="filtered-noise-pill" id="filtered-noise-pill" title="에이전트가 걸러낸 순간 잡음·센서 불량·일시 이탈 횟수">
+        <span class="icon">🛡️</span>
+        <span class="noise-label">가짜 경보 억제:</span>
+        <strong class="noise-count" id="filtered-noise-count">0</strong><span class="noise-unit">건</span>
+      </div>
+
       <!-- 요약 통계 팝업 토글 버튼 -->
       <button type="button" class="btn-summary" id="btn-summary-toggle">
         <span class="icon">📊</span>
@@ -176,6 +183,7 @@
             <span class="patient-phase" id="room-phase-1">유지기</span>
           </div>
           <div class="room-header-status">
+            <span class="sensor-alert-badge hidden" id="sensor-badge-1" title="센서 접촉 또는 신호 품질(SQI) 확인 필요">⚠️ 센서 확인 필요</span>
             <span class="priority-chip" id="room-score-1">위험도: 0.0</span>
             <span class="room-status-badge green" id="room-badge-1">정상</span>
           </div>
@@ -235,6 +243,26 @@
           <div class="sec-item"><span class="sec-label">RR:</span> <span class="sec-val" id="val-1-rr">--</span>/min</div>
           <div class="sec-item"><span class="sec-label">BT:</span> <span class="sec-val" id="val-1-bt">--</span>°C</div>
           <div class="sec-item"><span class="sec-label">PIP:</span> <span class="sec-val" id="val-1-pip">--</span></div>
+          <div class="sec-item"><span class="sec-label">SQI:</span> <span class="sec-val" id="val-1-sqi">--</span>%</div>
+        </div>
+
+        <!-- 교수님 요구사항(D-05): 뇌파 3대역(δ·α·β) 실시간 비율 바 -->
+        <div class="eeg-bands-strip" id="eeg-strip-1">
+          <div class="eeg-band-item">
+            <span class="eeg-band-label delta">δ 수면(1~4Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill delta" id="bar-1-delta" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-1-delta">--</span>
+          </div>
+          <div class="eeg-band-item">
+            <span class="eeg-band-label alpha">α 안정(8~12Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill alpha" id="bar-1-alpha" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-1-alpha">--</span>
+          </div>
+          <div class="eeg-band-item">
+            <span class="eeg-band-label beta">β 각성(13~30Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill beta" id="bar-1-beta" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-1-beta">--</span>
+          </div>
         </div>
 
         <!-- 스파크라인 트렌드 차트 (최근 60초) -->
@@ -304,6 +332,7 @@
             <span class="patient-phase" id="room-phase-2">유지기</span>
           </div>
           <div class="room-header-status">
+            <span class="sensor-alert-badge hidden" id="sensor-badge-2" title="센서 접촉 또는 신호 품질(SQI) 확인 필요">⚠️ 센서 확인 필요</span>
             <span class="priority-chip" id="room-score-2">위험도: 0.0</span>
             <span class="room-status-badge green" id="room-badge-2">정상</span>
           </div>
@@ -361,6 +390,25 @@
           <div class="sec-item"><span class="sec-label">RR:</span> <span class="sec-val" id="val-2-rr">--</span>/min</div>
           <div class="sec-item"><span class="sec-label">BT:</span> <span class="sec-val" id="val-2-bt">--</span>°C</div>
           <div class="sec-item"><span class="sec-label">PIP:</span> <span class="sec-val" id="val-2-pip">--</span></div>
+          <div class="sec-item"><span class="sec-label">SQI:</span> <span class="sec-val" id="val-2-sqi">--</span>%</div>
+        </div>
+
+        <div class="eeg-bands-strip" id="eeg-strip-2">
+          <div class="eeg-band-item">
+            <span class="eeg-band-label delta">δ 수면(1~4Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill delta" id="bar-2-delta" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-2-delta">--</span>
+          </div>
+          <div class="eeg-band-item">
+            <span class="eeg-band-label alpha">α 안정(8~12Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill alpha" id="bar-2-alpha" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-2-alpha">--</span>
+          </div>
+          <div class="eeg-band-item">
+            <span class="eeg-band-label beta">β 각성(13~30Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill beta" id="bar-2-beta" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-2-beta">--</span>
+          </div>
         </div>
 
         <div class="sparklines-section">
@@ -428,6 +476,7 @@
             <span class="patient-phase" id="room-phase-3">유지기</span>
           </div>
           <div class="room-header-status">
+            <span class="sensor-alert-badge hidden" id="sensor-badge-3" title="센서 접촉 또는 신호 품질(SQI) 확인 필요">⚠️ 센서 확인 필요</span>
             <span class="priority-chip" id="room-score-3">위험도: 0.0</span>
             <span class="room-status-badge green" id="room-badge-3">정상</span>
           </div>
@@ -485,6 +534,25 @@
           <div class="sec-item"><span class="sec-label">RR:</span> <span class="sec-val" id="val-3-rr">--</span>/min</div>
           <div class="sec-item"><span class="sec-label">BT:</span> <span class="sec-val" id="val-3-bt">--</span>°C</div>
           <div class="sec-item"><span class="sec-label">PIP:</span> <span class="sec-val" id="val-3-pip">--</span></div>
+          <div class="sec-item"><span class="sec-label">SQI:</span> <span class="sec-val" id="val-3-sqi">--</span>%</div>
+        </div>
+
+        <div class="eeg-bands-strip" id="eeg-strip-3">
+          <div class="eeg-band-item">
+            <span class="eeg-band-label delta">δ 수면(1~4Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill delta" id="bar-3-delta" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-3-delta">--</span>
+          </div>
+          <div class="eeg-band-item">
+            <span class="eeg-band-label alpha">α 안정(8~12Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill alpha" id="bar-3-alpha" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-3-alpha">--</span>
+          </div>
+          <div class="eeg-band-item">
+            <span class="eeg-band-label beta">β 각성(13~30Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill beta" id="bar-3-beta" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-3-beta">--</span>
+          </div>
         </div>
 
         <div class="sparklines-section">
@@ -552,6 +620,7 @@
             <span class="patient-phase" id="room-phase-4">유지기</span>
           </div>
           <div class="room-header-status">
+            <span class="sensor-alert-badge hidden" id="sensor-badge-4" title="센서 접촉 또는 신호 품질(SQI) 확인 필요">⚠️ 센서 확인 필요</span>
             <span class="priority-chip" id="room-score-4">위험도: 0.0</span>
             <span class="room-status-badge green" id="room-badge-4">정상</span>
           </div>
@@ -609,6 +678,25 @@
           <div class="sec-item"><span class="sec-label">RR:</span> <span class="sec-val" id="val-4-rr">--</span>/min</div>
           <div class="sec-item"><span class="sec-label">BT:</span> <span class="sec-val" id="val-4-bt">--</span>°C</div>
           <div class="sec-item"><span class="sec-label">PIP:</span> <span class="sec-val" id="val-4-pip">--</span></div>
+          <div class="sec-item"><span class="sec-label">SQI:</span> <span class="sec-val" id="val-4-sqi">--</span>%</div>
+        </div>
+
+        <div class="eeg-bands-strip" id="eeg-strip-4">
+          <div class="eeg-band-item">
+            <span class="eeg-band-label delta">δ 수면(1~4Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill delta" id="bar-4-delta" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-4-delta">--</span>
+          </div>
+          <div class="eeg-band-item">
+            <span class="eeg-band-label alpha">α 안정(8~12Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill alpha" id="bar-4-alpha" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-4-alpha">--</span>
+          </div>
+          <div class="eeg-band-item">
+            <span class="eeg-band-label beta">β 각성(13~30Hz)</span>
+            <div class="eeg-bar-track"><div class="eeg-bar-fill beta" id="bar-4-beta" style="width: 0%;"></div></div>
+            <span class="eeg-band-val" id="val-4-beta">--</span>
+          </div>
         </div>
 
         <div class="sparklines-section">
@@ -732,6 +820,47 @@
       </div>
     </div>
   </footer>
+
+  <!-- 2단계 화면: 선택한 수술실 상세 모니터 모달 (DECISIONS D-05, D-14) -->
+  <div class="modal-overlay hidden" id="room-detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
+    <div class="modal-card detail-monitor-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-icon">🖥️</span>
+          <h2 class="modal-title" id="detail-modal-title">제 1 수술실 상세 생체신호 &amp; 뇌파 모니터</h2>
+        </div>
+        <button type="button" class="btn-close-modal" id="btn-close-detail" aria-label="닫기">✕</button>
+      </div>
+      <div class="modal-body" id="detail-modal-body">
+        <div class="detail-top-meta">
+          <span class="detail-badge" id="detail-room-status">정상</span>
+          <span class="detail-badge" id="detail-room-score">우선순위 점수: 0.0</span>
+          <span class="detail-badge" id="detail-room-sensor">신호 품질: 정상</span>
+        </div>
+        <div class="detail-vitals-grid">
+          <div class="detail-vital-box"><span class="d-lab">MAP (평균동맥압)</span><strong class="d-val" id="detail-val-map">--</strong><small>mmHg</small></div>
+          <div class="detail-vital-box"><span class="d-lab">HR (심박수)</span><strong class="d-val" id="detail-val-hr">--</strong><small>bpm</small></div>
+          <div class="detail-vital-box"><span class="d-lab">SpO₂ (산소포화도)</span><strong class="d-val" id="detail-val-spo2">--</strong><small>%</small></div>
+          <div class="detail-vital-box"><span class="d-lab">BIS / SQI</span><strong class="d-val" id="detail-val-bis">--</strong><small id="detail-val-sqi">SQI --</small></div>
+        </div>
+        <div class="detail-eeg-section">
+          <h4>BIS 뇌파 주파수 3성분 분석 (δ 델타 · α 알파 · β 베타)</h4>
+          <div class="detail-eeg-bars">
+            <div class="eeg-band-item"><span class="eeg-band-label delta">δ 델타 (1~4Hz 수면파)</span><div class="eeg-bar-track"><div class="eeg-bar-fill delta" id="detail-bar-delta" style="width:0%"></div></div><span class="eeg-band-val" id="detail-val-delta">--</span></div>
+            <div class="eeg-band-item"><span class="eeg-band-label alpha">α 알파 (8~12Hz 안정파)</span><div class="eeg-bar-track"><div class="eeg-bar-fill alpha" id="detail-bar-alpha" style="width:0%"></div></div><span class="eeg-band-val" id="detail-val-alpha">--</span></div>
+            <div class="eeg-band-item"><span class="eeg-band-label beta">β 베타 (13~30Hz 각성파)</span><div class="eeg-bar-track"><div class="eeg-bar-fill beta" id="detail-bar-beta" style="width:0%"></div></div><span class="eeg-band-val" id="detail-val-beta">--</span></div>
+          </div>
+        </div>
+        <div class="detail-alerts-section">
+          <h4>현재 경보 및 센서 상태 판정 근거</h4>
+          <div id="detail-alerts-list" class="alerts-container">✓ 정상 생체징후 유지 중</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-primary" id="btn-confirm-detail">닫기</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 통계 요약 오버레이 모달 -->
   <div class="modal-overlay hidden" id="summary-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">

@@ -1,0 +1,7 @@
+# 배포 서버(Render 등) 전용 최소 의존성
+# - 대시보드 서버(main.py) 구동에 필요한 패키지만 포함 → 빌드가 빠르고 무료 플랜 메모리에 여유
+# - 데이터 선정 스크립트(data/scripts/)용 vitaldb·pandas·scipy·matplotlib 등은 requirements.txt 참고
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+numpy>=1.24.0
